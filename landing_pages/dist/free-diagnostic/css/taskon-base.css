@@ -1,0 +1,321 @@
+/* ================================================================
+ * taskon-base.css · TaskOn 落地页家族基础样式
+ *
+ * 内容:
+ *   1. CSS variables (light + dark)
+ *   2. CSS reset
+ *   3. Typography 基础
+ *   4. Layout 容器
+ *   5. Header / Footer (复用)
+ *   6. Utilities
+ *
+ * 维护说明:
+ *   理想情况下 CSS variables 应与 taskon 主站设计系统同步.
+ *   如未来 taskon 主站发布 design tokens 包, 替换本文件 :root 部分.
+ * ================================================================ */
+
+/* ----------------------------------------------------------------
+ * 1 · CSS Variables · Light mode (default)
+ * ---------------------------------------------------------------- */
+:root {
+  /* Brand */
+  --brand-primary: #2E75B6;
+  --brand-primary-hover: #235D94;
+  --brand-primary-soft: rgba(46, 117, 182, 0.15);
+  --brand-success: #22C55E;
+  --brand-success-soft: rgba(34, 197, 94, 0.12);
+  --brand-warning: #EAB308;
+  --brand-danger: #EF4444;
+  --brand-danger-soft: rgba(239, 68, 68, 0.12);
+
+  /* Background */
+  --bg-canvas: #FFFFFF;
+  --bg-surface: #F8FAFC;
+  --bg-elevated: #F1F5F9;
+
+  /* Foreground (text) */
+  --fg-primary: #0F172A;
+  --fg-secondary: #475569;
+  --fg-muted: #94A3B8;
+  --fg-inverse: #FFFFFF;
+
+  /* Borders */
+  --border-default: #E2E8F0;
+  --border-strong: #CBD5E1;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+
+  /* Layout */
+  --container-max: 1200px;
+  --container-narrow: 720px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+/* ----------------------------------------------------------------
+ * Dark mode
+ * ---------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-primary: #60A5FA;
+    --brand-primary-hover: #93C5FD;
+    --brand-primary-soft: rgba(96, 165, 250, 0.20);
+    --brand-success-soft: rgba(34, 197, 94, 0.18);
+    --brand-danger-soft: rgba(239, 68, 68, 0.18);
+
+    --bg-canvas: #0F172A;
+    --bg-surface: #1E293B;
+    --bg-elevated: #334155;
+
+    --fg-primary: #F1F5F9;
+    --fg-secondary: #CBD5E1;
+    --fg-muted: #64748B;
+    --fg-inverse: #0F172A;
+
+    --border-default: #334155;
+    --border-strong: #475569;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* ----------------------------------------------------------------
+ * 2 · CSS reset · minimal modern reset
+ * ---------------------------------------------------------------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--fg-primary);
+  background: var(--bg-canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+img, video, svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+a {
+  color: var(--brand-primary);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+a:hover {
+  color: var(--brand-primary-hover);
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+}
+
+/* ----------------------------------------------------------------
+ * 3 · Typography 基础
+ * ---------------------------------------------------------------- */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0 0 var(--space-md);
+  line-height: 1.25;
+  color: var(--fg-primary);
+  font-weight: 700;
+}
+
+p {
+  margin: 0 0 var(--space-md);
+  color: var(--fg-secondary);
+}
+
+/* ----------------------------------------------------------------
+ * 4 · Layout · container
+ * ---------------------------------------------------------------- */
+.container {
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 var(--space-lg);
+}
+
+@media (max-width: 768px) {
+  .container { padding: 0 var(--space-md); }
+}
+
+/* ----------------------------------------------------------------
+ * 5 · Header · TaskOn nav
+ * ---------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  max-width: var(--container-max);
+  margin: 0 auto;
+}
+
+.site-nav .logo {
+  color: var(--fg-primary);
+  font-size: 20px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.site-nav .logo:hover {
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-links a {
+  color: var(--fg-secondary);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.nav-links a:hover {
+  color: var(--fg-primary);
+  text-decoration: none;
+}
+
+.nav-cta {
+  padding: 8px 16px;
+  background: var(--brand-primary);
+  color: #fff !important;
+  border-radius: 6px;
+  font-weight: 600 !important;
+}
+
+.nav-cta:hover {
+  background: var(--brand-primary-hover);
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .nav-links li:not(:last-child) { display: none; }
+}
+
+/* ----------------------------------------------------------------
+ * Footer
+ * ---------------------------------------------------------------- */
+.site-footer {
+  padding: 48px 0 24px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-default);
+  margin-top: 60px;
+}
+
+.footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 32px;
+}
+
+.footer-brand {
+  flex: 1;
+  min-width: 200px;
+}
+
+.footer-brand strong {
+  display: block;
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: var(--fg-primary);
+}
+
+.footer-tagline {
+  font-size: 14px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.footer-links, .footer-social {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-links a, .footer-social a {
+  color: var(--fg-secondary);
+  font-size: 14px;
+}
+
+.footer-copyright {
+  font-size: 13px;
+  color: var(--fg-muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------
+ * 6 · Utilities
+ * ---------------------------------------------------------------- */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }

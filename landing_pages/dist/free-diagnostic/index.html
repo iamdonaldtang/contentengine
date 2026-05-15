@@ -1,0 +1,310 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Free Growth Diagnostic for Web3 Projects 路 TaskOn</title>
+
+  <!-- SEO -->
+  <meta name="description" content="30-min audit. Real data on user acquisition, retention, sybil risk. Backed by TaskOn data across 1000+ campaigns." />
+  <meta name="keywords" content="web3 growth, defi growth audit, perps dex growth, taskon, anti-sybil, quest growth, sybil detection" />
+  <meta name="author" content="TaskOn" />
+  <link rel="canonical" href="https://taskon.xyz/free-diagnostic" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Free Growth Diagnostic for Web3 Projects 路 TaskOn" />
+  <meta property="og:description" content="30-min audit. Real data on user acquisition, retention, sybil risk." />
+  <meta property="og:image" content="https://taskon.xyz/free-diagnostic/assets/og-image.png" />
+  <meta property="og:url" content="https://taskon.xyz/free-diagnostic" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="TaskOn" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:site" content="@TaskOnXYZ" />
+  <meta name="twitter:title" content="Free Growth Diagnostic for Web3 Projects 路 TaskOn" />
+  <meta name="twitter:description" content="30-min audit. Real data on user acquisition, retention, sybil risk." />
+  <meta name="twitter:image" content="https://taskon.xyz/free-diagnostic/assets/og-image.png" />
+
+  <!-- Favicon -->
+  <link rel="icon" href="/favicon.ico" />
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="/free-diagnostic/css/taskon-base.css" />
+  <link rel="stylesheet" href="/free-diagnostic/styles.css" />
+
+  <!-- Schema.org structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Service",
+    "name": "Free Growth Diagnostic",
+    "provider": {
+      "@type": "Organization",
+      "name": "TaskOn",
+      "url": "https://taskon.xyz"
+    },
+    "description": "30-min growth audit for Web3 projects. Free.",
+    "areaServed": "Worldwide",
+    "audience": {
+      "@type": "Audience",
+      "audienceType": "Web3 project teams"
+    }
+  }
+  </script>
+
+  <!-- Engine landing-page tracking config (must precede JS) -->
+  <script>
+    window.TASKON_INGEST_BASE = 'https://ingest.taskon.xyz';
+    window.TASKON_FORM_SELECTOR = '[data-taskon-signup]';
+    // V1: success state shown in-page (no redirect)
+    // To enable thank-you page redirect, uncomment:
+    // window.TASKON_THANK_YOU_URL = '/thank-you?from=free-diagnostic';
+  </script>
+</head>
+<body>
+
+  <!-- ============================================================ -->
+  <!-- Header 路 TaskOn nav (inline 路 keep in sync with shared/nav-partial.html) -->
+  <!-- ============================================================ -->
+  <header class="site-header">
+    <nav class="site-nav">
+      <a href="https://taskon.xyz" class="logo">
+        <strong>TaskOn</strong>
+      </a>
+      <ul class="nav-links">
+        <li><a href="https://taskon.xyz/product">Product</a></li>
+        <li><a href="https://taskon.xyz/pricing">Pricing</a></li>
+        <li><a href="https://taskon.xyz/blog">Blog</a></li>
+        <li><a href="https://app.taskon.xyz" class="nav-cta">Launch App</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <!-- ============================================================ -->
+  <!-- Main content -->
+  <!-- ============================================================ -->
+  <main>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="container">
+        <h1>Free Growth Diagnostic for Web3 Projects</h1>
+        <p class="subtitle">
+          30-minute audit. Real data on user acquisition, retention, sybil risk.<br />
+          Backed by TaskOn data across 1000+ campaigns.
+        </p>
+        <a href="#signup" class="cta-button">Get My Diagnostic 鈫?/a>
+      </div>
+    </section>
+
+    <!-- Form section -->
+    <section id="signup" class="signup-section">
+      <div class="container">
+        <h2>Get your diagnostic in 3 steps</h2>
+        <ol class="steps">
+          <li><strong>Submit</strong> your project info (60 seconds)</li>
+          <li><strong>We audit</strong> your on-chain + Quest data (within 24 hours)</li>
+          <li><strong>Receive</strong> your custom playbook by email + Telegram</li>
+        </ol>
+
+        <form data-taskon-signup class="signup-form" novalidate>
+          <div class="form-row">
+            <label for="email">
+              Email <span class="required">*</span>
+              <input
+                id="email"
+                type="email"
+                name="email"
+                required
+                placeholder="you@yourproject.com"
+                autocomplete="email"
+                spellcheck="false"
+              />
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label for="telegram_handle">
+              Telegram Handle <span class="required">*</span>
+              <input
+                id="telegram_handle"
+                type="text"
+                name="telegram_handle"
+                required
+                placeholder="@yourname"
+                pattern="^@?[a-zA-Z0-9_]{5,32}$"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <small class="hint">e.g. @yourname (5-32 characters)</small>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label for="project_url">
+              Project Website <span class="required">*</span>
+              <input
+                id="project_url"
+                type="url"
+                name="project_url"
+                required
+                placeholder="https://yourproject.xyz"
+                autocomplete="url"
+                spellcheck="false"
+              />
+            </label>
+          </div>
+
+          <!-- UTM hidden fields 路 landing_form_submit.js auto-fills from URL -->
+          <input type="hidden" name="utm_source" />
+          <input type="hidden" name="utm_medium" />
+          <input type="hidden" name="utm_campaign" />
+          <input type="hidden" name="utm_content" />
+          <input type="hidden" name="utm_term" />
+
+          <button type="submit" class="submit-button">
+            Get My Diagnostic 鈫?          </button>
+
+          <p data-taskon-error class="form-message form-error" hidden></p>
+          <p data-taskon-success class="form-message form-success" hidden>
+            <strong>Got it!</strong> We'll send your growth diagnostic to your email
+            and DM your Telegram within 24 hours.
+          </p>
+        </form>
+      </div>
+    </section>
+
+    <!-- What you get 路 3 columns -->
+    <section class="benefits">
+      <div class="container">
+        <h2>What you get</h2>
+        <div class="benefits-grid">
+          <div class="benefit-card">
+            <div class="benefit-icon" aria-hidden="true">鈿?/div>
+            <h3>30-min audit</h3>
+            <p>On-chain data + user behavior + sybil risk assessment, all in one place.</p>
+          </div>
+          <div class="benefit-card">
+            <div class="benefit-icon" aria-hidden="true">馃搵</div>
+            <h3>1-page playbook</h3>
+            <p>Custom growth recommendations specific to your project type and stage.</p>
+          </div>
+          <div class="benefit-card">
+            <div class="benefit-icon" aria-hidden="true">馃幆</div>
+            <h3>Consultation call</h3>
+            <p>15-min call with TaskOn growth team to walk through findings (optional).</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Trust signals -->
+    <section class="trust-signals">
+      <div class="container">
+        <p class="trust-line">Trusted by <strong>1000+</strong> Web3 projects</p>
+        <!-- Optional logo row 路 uncomment when logos available -->
+        <!-- <div class="logo-row">
+          <img src="/free-diagnostic/assets/logo-1.svg" alt="Project 1" />
+          <img src="/free-diagnostic/assets/logo-2.svg" alt="Project 2" />
+        </div> -->
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="faq">
+      <div class="container">
+        <h2>FAQ</h2>
+
+        <details>
+          <summary>What's in the diagnostic report?</summary>
+          <p>
+            User acquisition trends, retention metrics (D7/D30), sybil risk estimate,
+            top growth bottlenecks specific to your project type (Perps / DEX / Lending / etc).
+            Plus 3 concrete recommendations with expected impact.
+          </p>
+        </details>
+
+        <details>
+          <summary>How long until I get the report?</summary>
+          <p>
+            Within 24 hours of submission. Delivered by email and Telegram DM.
+            For urgent requests, mention it in your Telegram handle field.
+          </p>
+        </details>
+
+        <details>
+          <summary>Is it really free?</summary>
+          <p>
+            Yes. No payment, no credit card. We do this to find projects that fit
+            TaskOn services well. No obligation if we're not a fit.
+          </p>
+        </details>
+
+        <details>
+          <summary>How is my data handled?</summary>
+          <p>
+            We only use public on-chain data plus what you share with us.
+            We never share your contact info outside TaskOn. We don't sell data.
+            See our <a href="https://taskon.xyz/privacy">privacy policy</a> for details.
+          </p>
+        </details>
+
+        <details>
+          <summary>What if my project isn't a Perps DEX?</summary>
+          <p>
+            We diagnose DeFi / Lending / CEX / Quest-based platforms too.
+            Different patterns but same methodology. Mention your project type
+            in your Telegram handle field if it helps.
+          </p>
+        </details>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================================ -->
+  <!-- Footer 路 TaskOn footer (inline 路 keep in sync with shared/footer-partial.html) -->
+  <!-- ============================================================ -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-row">
+        <div class="footer-brand">
+          <strong>TaskOn</strong>
+          <p class="footer-tagline">The growth engine for Web3 projects.</p>
+        </div>
+        <ul class="footer-links">
+          <li><a href="https://taskon.xyz/product">Product</a></li>
+          <li><a href="https://taskon.xyz/blog">Blog</a></li>
+          <li><a href="https://taskon.xyz/about">About</a></li>
+          <li><a href="https://taskon.xyz/privacy">Privacy</a></li>
+          <li><a href="https://taskon.xyz/terms">Terms</a></li>
+        </ul>
+        <ul class="footer-social">
+          <li><a href="https://twitter.com/TaskOnXYZ" aria-label="Twitter">饾晱</a></li>
+          <li><a href="https://t.me/TaskOnSupport" aria-label="Telegram">TG</a></li>
+        </ul>
+      </div>
+      <p class="footer-copyright">漏 2026 TaskOn. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <!-- ============================================================ -->
+  <!-- Engine tracking JS 路 master in engine/frontend_snippets/ -->
+  <!-- Loading order: taskon_uid FIRST (cookie write), then others -->
+  <!-- ============================================================ -->
+  <script src="/free-diagnostic/js/taskon_uid.js"></script>
+  <script src="/free-diagnostic/js/landing_impression.js"></script>
+  <script src="/free-diagnostic/js/landing_form_submit.js"></script>
+
+  <!-- Optional: Cookie Consent banner (GDPR) -->
+  <!-- Uncomment + integrate when consent management tool is selected -->
+  <!--
+  <div id="cookie-consent" hidden>
+    <p>We use cookies for analytics. <button id="cc-accept">Accept</button> <button id="cc-reject">Reject</button></p>
+  </div>
+  -->
+
+</body>
+</html>
+

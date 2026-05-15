@@ -33,6 +33,7 @@ htmlcov/
 *.egg-info/
 build/
 dist/
+!landing_pages/dist/
 
 # ---- Editor / IDE ----
 .vscode/

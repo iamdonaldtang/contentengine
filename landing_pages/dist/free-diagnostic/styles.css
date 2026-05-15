@@ -1,0 +1,381 @@
+/* ================================================================
+ * /free-diagnostic · page-specific styles
+ *
+ * Builds on /css/taskon-base.css. Only overrides + page-specific
+ * components live here.
+ * ================================================================ */
+
+/* ----------------------------------------------------------------
+ * Hero
+ * ---------------------------------------------------------------- */
+.hero {
+  padding: 80px 0 60px;
+  text-align: center;
+  background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-canvas) 100%);
+}
+
+.hero h1 {
+  font-size: clamp(28px, 5vw, 44px);
+  line-height: 1.2;
+  margin: 0 0 20px;
+  color: var(--fg-primary);
+}
+
+.hero .subtitle {
+  font-size: clamp(15px, 2vw, 18px);
+  line-height: 1.6;
+  margin: 0 auto 32px;
+  max-width: 560px;
+  color: var(--fg-secondary);
+}
+
+.cta-button {
+  display: inline-block;
+  padding: 14px 32px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-primary);
+  border: none;
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.cta-button:hover {
+  background: var(--brand-primary-hover);
+}
+
+.cta-button:active {
+  transform: translateY(1px);
+}
+
+/* ----------------------------------------------------------------
+ * Signup section
+ * ---------------------------------------------------------------- */
+.signup-section {
+  padding: 60px 0;
+  background: var(--bg-surface);
+}
+
+.signup-section h2 {
+  font-size: clamp(22px, 3vw, 28px);
+  margin: 0 0 24px;
+  text-align: center;
+  color: var(--fg-primary);
+}
+
+.steps {
+  max-width: 540px;
+  margin: 0 auto 36px;
+  padding-left: 0;
+  list-style: none;
+  counter-reset: step-counter;
+}
+
+.steps li {
+  position: relative;
+  padding: 12px 0 12px 44px;
+  counter-increment: step-counter;
+  color: var(--fg-secondary);
+  font-size: 16px;
+}
+
+.steps li::before {
+  content: counter(step-counter);
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--brand-primary);
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  line-height: 30px;
+  font-size: 14px;
+}
+
+.steps li strong {
+  color: var(--fg-primary);
+}
+
+/* Form */
+.signup-form {
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.signup-form label {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg-primary);
+  gap: 8px;
+}
+
+.signup-form .required {
+  color: var(--brand-danger);
+  font-weight: 400;
+}
+
+.signup-form input {
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--fg-primary);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.signup-form input:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px var(--brand-primary-soft);
+}
+
+.signup-form input:invalid:not(:placeholder-shown):not(:focus) {
+  border-color: var(--brand-danger);
+}
+
+.signup-form .hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.submit-button {
+  margin-top: 8px;
+  padding: 14px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-primary);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.submit-button:hover {
+  background: var(--brand-primary-hover);
+}
+
+.submit-button:disabled {
+  background: var(--fg-muted);
+  cursor: not-allowed;
+}
+
+.form-message {
+  padding: 12px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.form-message[hidden] {
+  display: none;
+}
+
+.form-error {
+  color: var(--brand-danger);
+  background: var(--brand-danger-soft);
+}
+
+.form-success {
+  color: var(--brand-success);
+  background: var(--brand-success-soft);
+}
+
+/* ----------------------------------------------------------------
+ * Benefits · 3 columns
+ * ---------------------------------------------------------------- */
+.benefits {
+  padding: 60px 0;
+}
+
+.benefits h2 {
+  font-size: clamp(22px, 3vw, 28px);
+  text-align: center;
+  margin: 0 0 36px;
+  color: var(--fg-primary);
+}
+
+.benefits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.benefit-card {
+  padding: 24px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.benefit-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.benefit-card h3 {
+  font-size: 18px;
+  margin: 0 0 10px;
+  color: var(--fg-primary);
+}
+
+.benefit-card p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------
+ * Trust signals
+ * ---------------------------------------------------------------- */
+.trust-signals {
+  padding: 40px 0;
+  text-align: center;
+  background: var(--bg-surface);
+}
+
+.trust-line {
+  font-size: 16px;
+  color: var(--fg-secondary);
+  margin: 0;
+}
+
+.trust-line strong {
+  color: var(--fg-primary);
+  font-weight: 700;
+}
+
+.logo-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 24px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.logo-row img {
+  height: 32px;
+  opacity: 0.7;
+  filter: grayscale(100%);
+  transition: opacity 0.2s, filter 0.2s;
+}
+
+.logo-row img:hover {
+  opacity: 1;
+  filter: grayscale(0%);
+}
+
+/* ----------------------------------------------------------------
+ * FAQ
+ * ---------------------------------------------------------------- */
+.faq {
+  padding: 60px 0;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.faq h2 {
+  font-size: clamp(22px, 3vw, 28px);
+  margin: 0 0 24px;
+  color: var(--fg-primary);
+}
+
+.faq details {
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+}
+
+.faq summary {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  list-style: none;
+  outline: none;
+  padding-right: 24px;
+  position: relative;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::after {
+  content: '+';
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-size: 18px;
+  color: var(--fg-muted);
+  transition: transform 0.2s;
+}
+
+.faq details[open] summary::after {
+  content: '−';
+}
+
+.faq details p {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+}
+
+.faq details p a {
+  color: var(--brand-primary);
+}
+
+/* ----------------------------------------------------------------
+ * Responsive · mobile breakpoints
+ * ---------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .hero { padding: 56px 0 40px; }
+  .signup-section { padding: 40px 0; }
+  .benefits, .trust-signals, .faq { padding: 40px 0; }
+  .benefits-grid { grid-template-columns: 1fr; }
+  .signup-form { padding: 0 16px; }
+  .submit-button { width: 100%; }
+}
+
+/* ----------------------------------------------------------------
+ * Dark mode (follows prefers-color-scheme · CSS variables auto-switch in taskon-base.css)
+ * ---------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  /* All overrides handled via CSS variables in taskon-base.css */
+}
+
+/* ----------------------------------------------------------------
+ * Print
+ * ---------------------------------------------------------------- */
+@media print {
+  .hero, .signup-section, .benefits, .trust-signals { padding: 20px 0; }
+  .cta-button, .submit-button { display: none; }
+}
