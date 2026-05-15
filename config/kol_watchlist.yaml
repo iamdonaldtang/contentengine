@@ -1,0 +1,181 @@
+# TaskOn KOL Watchlist v0
+# 创建：2026-05-12 · 来源：v3 规划 B3 §1.2
+# 用途：daily-kol-replies + twitter-search-scraper + 季度 Pre-Read DM
+# 维护：月度由 Donald + 兼职女生 review；季度 Donald 决定升降级
+
+# Tier A · Pre-Read 8 人（季度 Benchmark 公开前 48h Donald 亲发 DM）
+# 选择标准：业内话语权强 + 内容硬核 + 历史互动友好
+pre_read_8:
+  - handle: "@0xngmi"
+    focus: "DeFi data / Sybil / Anti-bot"
+    angle: "数据视角；适合切 Sybil/反 bot 类切片"
+    tier: A
+    last_interaction: null
+  - handle: "@hildobby"
+    focus: "Dune / on-chain analytics"
+    angle: "Dune 数据交叉验证；切 metric 中位数对比"
+    tier: A
+    last_interaction: null
+  - handle: "@smyyguy"
+    focus: "Growth / Quest"
+    angle: "增长视角；适合切 Quest CAC / retention 数据"
+    tier: A
+    last_interaction: null
+  - handle: "@0xCygaar"
+    focus: "L2 / infra"
+    angle: "infra 视角；适合切 L2 用户活跃度"
+    tier: A
+    last_interaction: null
+  - handle: "@yyctrader1"
+    focus: "Perps / Asia trading"
+    angle: "亚洲 Perps 圈视角；适合切 Perps DEX 增长"
+    tier: A
+    last_interaction: null
+  - handle: "@milesdeutscher"
+    focus: "Macro + market"
+    angle: "宏观视角；适合切叙事疲劳/周期切片"
+    tier: A
+    last_interaction: null
+  - handle: "@rchen8"
+    focus: "DeFi growth / VC"
+    angle: "VC 视角；适合切 VC 代币破发数据"
+    tier: A
+    last_interaction: null
+  - handle: "@0xPrismatic"
+    focus: "Crypto research / writing"
+    angle: "研究员视角；适合切独家数据 narrative"
+    tier: A
+    last_interaction: null
+
+# Tier B · 持续观察 22 人（等条件成熟升级到 A）
+observe_22:
+  - handle: "@cobie"
+    focus: "Crypto thinker / podcast"
+    angle: "他公开站过的立场可做 Co-Authored Take"
+    tier: B
+  - handle: "@sandeepnailwal"
+    focus: "Polygon co-founder"
+    angle: "infra 决策者"
+    tier: B
+  - handle: "@hosseeb"
+    focus: "Dragonfly partner / DeFi"
+    angle: "VC 立场"
+    tier: B
+  - handle: "@miles_dt"
+    focus: "Variant partner"
+    angle: "VC 立场"
+    tier: B
+  - handle: "@lennysan"
+    focus: "B2B SaaS growth / Lenny's Newsletter"
+    angle: "Web2 跨界 KOL；LinkedIn 主战场"
+    tier: B
+  - handle: "@DefianceCapital"
+    focus: "DeFi fund"
+    angle: "基金视角"
+    tier: B
+  - handle: "@dragonfly_xyz"
+    focus: "Dragonfly research"
+    angle: "研究视角"
+    tier: B
+  - handle: "@CryptoCobie"
+    focus: "Trading / commentary"
+    angle: "传播力强"
+    tier: B
+  - handle: "@trondao"
+    focus: "L1 leadership"
+    angle: "L1 视角"
+    tier: B
+  - handle: "@VitalikButerin"
+    focus: "Ethereum founder"
+    angle: "理论制高点；只在他主动讨论增长/Sybil 时介入"
+    tier: B
+  - handle: "@_prestwich"
+    focus: "Engineer / DeFi"
+    angle: "工程师视角"
+    tier: B
+  - handle: "@AnthurineXiang"
+    focus: "Asia crypto / Hashkey"
+    angle: "亚洲圈关系"
+    tier: B
+  - handle: "@kyled116"
+    focus: "Perps trader"
+    angle: "Perps 用户视角"
+    tier: B
+  - handle: "@DegenSpartan"
+    focus: "Trading sentiment"
+    angle: "圈层情绪指标"
+    tier: B
+  - handle: "@haydenadams"
+    focus: "Uniswap founder"
+    angle: "Top DEX 决策者"
+    tier: B
+  - handle: "@nansen_ai"
+    focus: "On-chain analytics platform"
+    angle: "竞品/可联创"
+    tier: B
+  - handle: "@MessariCrypto"
+    focus: "Research media"
+    angle: "投稿目标 + 引用渠道"
+    tier: B
+  - handle: "@DefiLlama"
+    focus: "Data dashboard"
+    angle: "数据基准 + 联名机会"
+    tier: B
+  - handle: "@TheBlock__"
+    focus: "Media"
+    angle: "数据引用渠道"
+    tier: B
+  - handle: "@TheDefiantNews"
+    focus: "DeFi media"
+    angle: "数据引用渠道"
+    tier: B
+  - handle: "@Wu_blockchain"
+    focus: "Chinese crypto media"
+    angle: "中文圈渠道"
+    tier: B
+  - handle: "@phyrex_ni"
+    focus: "Chinese crypto KOL"
+    angle: "Donald CN 主战场对位"
+    tier: B
+
+# 监控关键词（用于过滤 KOL 当日 Top10 帖）
+filter_keywords:
+  primary:
+    - quest
+    - sybil
+    - anti-sybil
+    - growth
+    - DEX
+    - perps
+    - yapper
+    - airdrop
+    - bot
+    - retention
+  secondary:
+    - Galxe
+    - Layer3
+    - Zealy
+    - Kaito
+    - Web3 marketing
+    - CMO
+    - CAC
+    - LTV
+
+# 弹药库映射（Reply 优先用哪条弹药）
+ammo_mapping:
+  perps_dex_traffic: ammo_03_internal_fracture.md
+  sybil_or_bots: ammo_04_trust_collapse.md
+  pmf_or_real_users: ammo_05_pmf_missing.md
+  narrative_fatigue: ammo_06_narrative_fatigue.md
+  pump_fun_garbage: ammo_01_garbage_coins.md
+  vc_dump_blackrock: ammo_02_wallstreet_capture.md
+
+# 变更记录
+changelog:
+  - version: v0
+    date: 2026-05-12
+    author: Claude (按 Donald v3 规划骨架建立)
+    note: |
+      初始 30 KOL（Pre-Read 8 + 观察 22）。
+      Tier A 8 人 = v3 已锁定；Tier B 22 人 = Claude 按行业常识补，等 Donald 月度 review 校准。
+      待 Donald 复核 / 增删后写入 v1。

@@ -1,0 +1,143 @@
+﻿<#
+.SYNOPSIS
+    Register TaskOn Marketing Engine cron tasks in Windows Task Scheduler.
+
+.DESCRIPTION
+    Creates 8 scheduled tasks (per docs/architecture.md §5). Idempotent:
+    re-running updates existing tasks rather than duplicating.
+
+    Tasks are registered under the principal "TaskOn-*" with:
+        - Run whether user is logged on or not = false (uses interactive token)
+        - Wake the computer to run this task = true
+        - If task is missed, run as soon as possible = true
+
+    Run from PowerShell as the user who will own these tasks. Admin not
+    strictly required, but recommended for "run when not logged on".
+
+.PARAMETER PythonExe
+    Absolute path to python.exe. Defaults to .venv\Scripts\python.exe under
+    the engine root if present, else the system "python".
+
+.PARAMETER EngineRoot
+    Absolute path to engine root. Defaults to the parent of this script.
+
+.PARAMETER Remove
+    Switch: delete all TaskOn-* tasks and exit.
+
+.EXAMPLE
+    pwsh .\scripts\setup_scheduler.ps1
+    pwsh .\scripts\setup_scheduler.ps1 -Remove
+#>
+[CmdletBinding()]
+param(
+    [string]$PythonExe,
+    [string]$EngineRoot,
+    [switch]$Remove
+)
+
+$ErrorActionPreference = "Stop"
+
+# ---- Resolve paths ----
+if (-not $EngineRoot) {
+    $EngineRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
+if (-not $PythonExe) {
+    $venvPython = Join-Path $EngineRoot ".venv\Scripts\python.exe"
+    if (Test-Path $venvPython) {
+        $PythonExe = $venvPython
+    } else {
+        $PythonExe = "python"
+    }
+}
+Write-Host "Engine root: $EngineRoot" -ForegroundColor Cyan
+Write-Host "Python exe : $PythonExe" -ForegroundColor Cyan
+
+# ---- Task definitions ----
+# Module path is passed as `python -m <module>` so the engine root is the cwd.
+$tasks = @(
+    @{ Name = "TaskOn-metrics-collector"   ; Module = "jobs.metrics_collector"   ; Daily  = "20:00" },
+    @{ Name = "TaskOn-attribution-engine"  ; Module = "jobs.attribution_engine"  ; Daily  = "21:00" },
+    @{ Name = "TaskOn-backup-sqlite"       ; Module = "scripts.backup_sqlite"    ; Daily  = "23:00" },
+    @{ Name = "TaskOn-kol-watch"           ; Module = "jobs.kol_watch"           ; Weekly = @{ Day = "Sunday"; At = "10:00" } },
+    @{ Name = "TaskOn-weekly-reporter"     ; Module = "jobs.weekly_reporter"     ; Weekly = @{ Day = "Sunday"; At = "18:00" } },
+    @{ Name = "TaskOn-performance-analyzer"; Module = "jobs.performance_analyzer"; Weekly = @{ Day = "Sunday"; At = "18:30" } },
+    @{ Name = "TaskOn-topic-ranker"        ; Module = "jobs.topic_ranker"        ; Weekly = @{ Day = "Sunday"; At = "20:00" } },
+    @{ Name = "TaskOn-monthly-reporter"    ; Module = "jobs.monthly_reporter"    ; Weekly = @{ Day = "Sunday"; At = "19:00" } },
+    @{ Name = "TaskOn-update-btouch"       ; Module = "jobs.update_btouch"       ; Weekly = @{ Day = "Monday"; At = "09:00" } },
+    # Monthly jobs (1st Sunday) — registered as Weekly Sunday triggers and
+    # self-gated inside each script via ``is_first_sunday_of_month()``.
+    # Subsequent Sundays exit at the gate, returning 0 (idempotent).
+    @{ Name = "TaskOn-cohort-analysis"     ; Module = "jobs.cohort_analysis"     ; Weekly = @{ Day = "Sunday"; At = "19:30" } },
+    @{ Name = "TaskOn-ab-aggregator"       ; Module = "jobs.ab_aggregator"       ; Weekly = @{ Day = "Sunday"; At = "20:00" } },
+    @{ Name = "TaskOn-channel-attribution" ; Module = "jobs.channel_attribution" ; Weekly = @{ Day = "Sunday"; At = "20:30" } }
+)
+
+# ---- Remove mode ----
+if ($Remove) {
+    Write-Host "`nRemoving all TaskOn-* tasks..." -ForegroundColor Yellow
+    Get-ScheduledTask -TaskName "TaskOn-*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "  - $($_.TaskName)"
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false
+    }
+    Write-Host "Done." -ForegroundColor Green
+    exit 0
+}
+
+# ---- Register tasks ----
+foreach ($t in $tasks) {
+    $name = $t.Name
+    Write-Host "`n[+] $name" -ForegroundColor Green
+
+    $args = "-m $($t.Module)"
+    $action = New-ScheduledTaskAction `
+        -Execute $PythonExe `
+        -Argument $args `
+        -WorkingDirectory $EngineRoot
+
+    if ($t.Daily) {
+        $trigger = New-ScheduledTaskTrigger -Daily -At $t.Daily
+    } elseif ($t.Weekly) {
+        $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $t.Weekly.Day -At $t.Weekly.At
+    } else {
+        Write-Warning "task $name has no schedule definition; skipping"
+        continue
+    }
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -WakeToRun `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+        -RestartCount 2 `
+        -RestartInterval (New-TimeSpan -Minutes 5)
+
+    # Use current user as principal. For "run whether user is logged on or not",
+    # add `-LogonType Password` and pass credentials interactively.
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $env:USERNAME `
+        -LogonType Interactive `
+        -RunLevel Limited
+
+    $task = New-ScheduledTask `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Principal $principal `
+        -Description "TaskOn Marketing Engine · $($t.Module)"
+
+    # Idempotent register (delete existing first)
+    Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue | ForEach-Object {
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false
+    }
+    Register-ScheduledTask -TaskName $name -InputObject $task | Out-Null
+    Write-Host "    schedule: $(if ($t.Daily) { "daily $($t.Daily)" } else { "weekly $($t.Weekly.Day) $($t.Weekly.At)" })"
+}
+
+Write-Host "`n✅ Registered $($tasks.Count) tasks." -ForegroundColor Green
+Write-Host "`nVerify with:" -ForegroundColor Cyan
+Write-Host "    Get-ScheduledTask -TaskName 'TaskOn-*' | Select-Object TaskName, State, @{n='NextRunTime';e={(Get-ScheduledTaskInfo $_.TaskName).NextRunTime}}"
+Write-Host "`nRun a task manually:" -ForegroundColor Cyan
+Write-Host "    Start-ScheduledTask -TaskName 'TaskOn-metrics-collector'"
+Write-Host "`nRemove all:" -ForegroundColor Cyan
+Write-Host "    pwsh .\scripts\setup_scheduler.ps1 -Remove"

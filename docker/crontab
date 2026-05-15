@@ -1,0 +1,55 @@
+# TaskOn Marketing Engine · supercronic crontab
+#
+# Format: 5 fields (min hour dom month dow) + command.
+# All times are in the container's TZ (Asia/Shanghai by default; set via .env TIMEZONE).
+#
+# Supercronic logs every job invocation and its exit status to stdout/stderr,
+# which `docker logs taskon-engine` surfaces as the unified log stream.
+#
+# Edit this file → rebuild image (or bind-mount it for hot edits during dev).
+
+# ─── Daily jobs ──────────────────────────────────────────────────────────────
+30  8 * * *  cd /app && python -m jobs.kol_daily_replier
+0 20 * * *   cd /app && python -m jobs.metrics_collector
+0 21 * * *   cd /app && python -m jobs.attribution_engine
+0 23 * * *   cd /app && python -m scripts.backup_sqlite
+
+# ─── Weekly jobs ─────────────────────────────────────────────────────────────
+0 10 * * 0   cd /app && python -m jobs.kol_watch
+0 18 * * 0   cd /app && python -m jobs.weekly_reporter
+30 18 * * 0  cd /app && python -m jobs.performance_analyzer
+0 19 * * 0   cd /app && python -m jobs.monthly_reporter
+0 20 * * 0   cd /app && python -m jobs.topic_ranker
+
+# ─── Weekday jobs ────────────────────────────────────────────────────────────
+0  9 * * 1   cd /app && python -m jobs.update_btouch
+
+# ─── Monday 11:00 · MPT video render for every drafted piece ─────────────────
+# Adapter writes shorts_60s.md by 09:30; allow 90 min of buffer.
+0 11 * * 1   cd /app && for d in $(find runtime/drafts -mindepth 1 -maxdepth 1 -type d); do pid=$(basename "$d"); test -f "$d/shorts_60s.md" -a ! -f "$d/shorts_60s.mp4" && python -m jobs.mpt_runner --piece-id "$pid" || true; done
+
+# ─── Sunday 22:00 · post-topic-ranker + post-UTM-gen schedule planner ────────
+# Runs over every piece in state='reviewed' (topic_ranker → critic → ready).
+# For now the cron iterates "selected" pieces with drafts/<id>/utm_links.json
+# present. CLI shape: --piece-id required, so the cron wraps with a tiny shell
+# loop that finds candidate piece_ids.
+0 22 * * 0   cd /app && for d in $(find runtime/drafts -mindepth 1 -maxdepth 1 -type d -newer runtime/state.db 2>/dev/null); do pid=$(basename "$d"); test -f "$d/utm_links.json" && python -m jobs.schedule_planner --piece-id "$pid" || true; done
+
+# ─── Monthly Newsletter (25th 09:00 → draft preview; penultimate Wed → real send) ───
+# 25th 09:00: Cowork's `email-sequence` skill writes runtime/newsletter_draft_YYYY-MM.md
+# (this engine cron runs in dry-run mode so Donald sees a preview HTML for review).
+0 9 25 * *   cd /app && f=runtime/newsletter_draft_$(date +%Y-%m).md; test -f "$f" && python -m jobs.newsletter_assembler --draft-path "$f" --dry-run || true
+
+# ─── Monthly jobs (1st Sunday of month) ──────────────────────────────────────
+# `dom=1-7 dow=0` = "Sunday between day-of-month 1 and 7" = 1st Sunday.
+# NOTE: vixie-cron treats dom+dow as OR; supercronic and most modern crons
+# treat it as AND when both are non-*. If migrating to a strict-OR cron, add
+# an `is_first_sunday_of_month()` self-gate inside each script.
+30 19 1-7 * 0   cd /app && python -m jobs.cohort_analysis
+0  20 1-7 * 0   cd /app && python -m jobs.ab_aggregator
+30 20 1-7 * 0   cd /app && python -m jobs.channel_attribution
+
+# ─── Health heartbeat (every 5 minutes) ──────────────────────────────────────
+# Writes a row to `heartbeat` table so Cowork dashboard knows the container is
+# alive even when no real job has fired recently.
+*/5 * * * *  cd /app && python -c "from lib.db import db; db.heartbeat.record('container_heartbeat','ok',0,0)"

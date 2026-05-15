@@ -1,0 +1,80 @@
+# ============================================================
+# run_metrics.ps1 · 阶段 8 数据回流 + 归因 + 周报
+# ============================================================
+# 用法: .\scripts\run_metrics.ps1 <piece_id> [week_tag]
+# 默认 week_tag = 当前 ISO 周
+# 输出: metrics_daily 30m 时点 + leads 归因 + weekly_report_<week>.md
+# ============================================================
+
+param(
+    [Parameter(Mandatory=$true)][string]$PieceId,
+    [string]$WeekTag = $null
+)
+
+Set-Location D:\Taskon\marketing\engine
+$ErrorActionPreference = "Continue"
+
+if (-not $WeekTag) {
+    $now = Get-Date
+    $iso = [System.Globalization.ISOWeek]::GetWeekOfYear($now)
+    $WeekTag = "{0}W{1:D2}" -f $now.Year, $iso
+}
+$Today = (Get-Date -Format "yyyy-MM-dd")
+
+Write-Host "`n=== piece: $PieceId · week: $WeekTag · date: $Today ===" -ForegroundColor Cyan
+
+Write-Host "`n[1/4] metrics_collector: 拉 Postiz + X + GA4 + shlink + btouch 5 源..." -ForegroundColor Yellow
+docker compose exec engine python -m jobs.metrics_collector --date $Today
+
+Write-Host "`n[2/4] attribution_engine: last_touch + first_touch + linear 3 档..." -ForegroundColor Yellow
+docker compose exec engine python -m jobs.attribution_engine --date $Today
+
+Write-Host "`n[3/4] weekly_reporter: 跑 $WeekTag 周报（含本条 piece 数据快照）..." -ForegroundColor Yellow
+docker compose exec engine python -m jobs.weekly_reporter --week $WeekTag
+
+Write-Host "`n[4/4] 数据闭环验证..." -ForegroundColor Yellow
+Write-Host "`n--- metrics_daily 本条 piece 数据点 ---" -ForegroundColor Magenta
+docker compose exec engine python -c @"
+from lib.db import db
+rows = db.fetchall('''
+    SELECT m.platform, m.snapshot_type, m.impressions, m.likes, m.replies, m.retweets, m.snapshot_at
+    FROM metrics_daily m
+    JOIN publishings p ON m.publishing_id = p.id
+    WHERE p.piece_id = ?
+    ORDER BY m.snapshot_at DESC LIMIT 20
+''', ('$PieceId',))
+for r in rows:
+    print(f'  {r[\"platform\"]:<18} {r[\"snapshot_type\"]:<6} impr={r[\"impressions\"]:<6} like={r[\"likes\"]:<4} reply={r[\"replies\"]:<4} rt={r[\"retweets\"]:<4} at={r[\"snapshot_at\"]}')
+print('  (空 = Postiz 30min 数据未回流, 等会儿重跑)')
+"@
+
+Write-Host "`n--- leads.first_utm_campaign 命中本周 ---" -ForegroundColor Magenta
+docker compose exec engine python -c @"
+from lib.db import db
+rows = db.fetchall('''
+    SELECT id, email, first_utm_campaign, first_utm_content, first_landing_page, datetime(created_at, 'localtime') created
+    FROM leads
+    WHERE first_utm_campaign LIKE '%$($PieceId.ToLower())%'
+       OR first_utm_campaign LIKE '%$($PieceId -replace 'W','w' -replace '-thread01','_thread01')%'
+    ORDER BY id DESC LIMIT 10
+''')
+if not rows:
+    print('  (尚无 Lead · 真留资需落地页 JS 嵌入 + 用户访问 24h+ · 当前是机制验证)')
+for r in rows:
+    print(f'  lead#{r[\"id\"]} {r[\"email\"]} campaign={r[\"first_utm_campaign\"]} content={r[\"first_utm_content\"]} created={r[\"created\"]}')
+"@
+
+$weekFile = "D:\Taskon\marketing\engine\runtime\weekly_report_$WeekTag.md"
+$bareFile = "D:\Taskon\marketing\engine\runtime\weekly_report_${WeekTag}_bare.md"
+if (Test-Path $weekFile) {
+    Write-Host "`n--- weekly_report_$WeekTag.md ---" -ForegroundColor Magenta
+    Get-Content $weekFile | Select-Object -First 60
+    Write-Host "`n=== ✓ 周报完整内容: $weekFile ===" -ForegroundColor Green
+} elseif (Test-Path $bareFile) {
+    Write-Host "`n--- weekly_report 走 _bare fallback（LLM 全失败）---" -ForegroundColor Yellow
+    Get-Content $bareFile | Select-Object -First 60
+} else {
+    Write-Host "`n  ✗ 周报未生成 · 检查 docker logs engine" -ForegroundColor Red
+}
+
+Write-Host "`n=== ✓ 5h 闭环数据回流完成 ===" -ForegroundColor Green

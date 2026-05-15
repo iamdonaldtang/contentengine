@@ -1,0 +1,28 @@
+<!-- ================================================================
+ * shared/nav-partial.html · TaskOn 落地页家族通用 nav 片段
+ *
+ * 用途:
+ *   - V1 实施: 直接将此 HTML inline 复制到各落地页 index.html 的 <header> 内
+ *   - V2 升级: 用 server-side include (nginx ssi on) 或 client-side fetch 加载
+ *
+ * 维护说明:
+ *   - 当 taskon 主站 nav 改版时, 同步更新本文件
+ *   - 同步更新所有 inline 引用本片段的 index.html
+ *
+ * 依赖样式:
+ *   - taskon-base.css :: .site-header / .site-nav / .nav-links / .nav-cta
+ * ================================================================ -->
+
+<header class="site-header">
+  <nav class="site-nav">
+    <a href="https://taskon.xyz" class="logo">
+      <strong>TaskOn</strong>
+    </a>
+    <ul class="nav-links">
+      <li><a href="https://taskon.xyz/product">Product</a></li>
+      <li><a href="https://taskon.xyz/pricing">Pricing</a></li>
+      <li><a href="https://taskon.xyz/blog">Blog</a></li>
+      <li><a href="https://app.taskon.xyz" class="nav-cta">Launch App</a></li>
+    </ul>
+  </nav>
+</header>

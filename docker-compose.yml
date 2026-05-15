@@ -1,0 +1,158 @@
+# TaskOn Marketing Engine · local docker deployment.
+#
+# Single service that runs all 8 cron jobs inside one container using
+# supercronic. Persistent state lives on a bind-mounted host directory so
+# you can inspect / back up state.db / drafts from the host.
+#
+# Usage:
+#   docker compose build         # build image
+#   docker compose up -d         # start (detached)
+#   docker compose logs -f       # tail unified stdout (cron + jobs)
+#   docker compose exec engine python -m jobs.metrics_collector --dry-run
+#   docker compose down          # stop + remove (data persists in ./runtime)
+#
+# Edit the host ./config/* + ./.env → restart container to pick up changes.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: 1000
+        GID: 1000
+    image: taskon-marketing-engine:0.1
+    container_name: taskon-engine
+    restart: unless-stopped
+
+    # Read all secrets and paths from the host .env (NOT baked into image).
+    env_file:
+      - .env
+
+    # Override host-side absolute paths with in-container paths.
+    # The .env still has D:/Taskon/marketing/engine paths for Windows-host
+    # tooling; here we re-point them at /app where the container actually lives.
+    environment:
+      ENGINE_ROOT: /app
+      SQLITE_PATH: /app/runtime/state.db
+      RUNTIME_DIR: /app/runtime
+      DRAFTS_DIR: /app/runtime/drafts
+      LOG_DIR: /app/runtime/logs
+      BACKUP_DIR: /app/runtime/backups
+      GA4_CREDENTIALS_PATH: /app/runtime/ga4_credentials.json
+      PYTHONPATH: /app
+      # Surface the in-container TZ even if the host .env omits it.
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+
+    volumes:
+      # State persistence — survives container rebuilds.
+      - ./runtime:/app/runtime
+      # Config hot-reload — edit YAML/prompts on host, no rebuild needed
+      # (jobs re-read configs on each invocation).
+      - ./config:/app/config:ro
+      # Optional: bind the crontab so you can tweak schedules without rebuild.
+      - ./docker/crontab:/app/docker/crontab:ro
+      # Root-level config.yaml — image bakes it at build, but the bind mount
+      # shadows it so host edits propagate without rebuild.
+      - ./config.yaml:/app/config.yaml:ro
+      # Dev hot-reload for source code — edit .py on host, no rebuild needed.
+      # Each cron / pytest invocation re-imports from these paths. The image
+      # still contains a baseline copy from `docker build`; the bind mounts
+      # shadow it so host changes win.
+      - ./jobs:/app/jobs
+      - ./lib:/app/lib
+      - ./sources:/app/sources
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+      - ./ingestion:/app/ingestion
+      - ./templates:/app/templates
+      - ./frontend_snippets:/app/frontend_snippets
+
+    # No exposed ports — pure batch processor. Public webhook ingestion is
+    # served by the sibling `ingestion` service below.
+
+    # Healthcheck defined in Dockerfile.
+
+    # Resource limits — tune for VPS deployment.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # -------------------------------------------------------------------------
+  # ingestion · HTTP webhook + landing-signup endpoint
+  # -------------------------------------------------------------------------
+  # Public surface: POST /api/landing-signup, /api/listmonk-webhook,
+  # /api/ses-bounce + GET /health, /metrics. HTTPS termination + DDoS protection
+  # are handled upstream by Cloudflare Tunnel — this container speaks plain
+  # HTTP on :5051. Localhost port-map below is for `curl localhost:5051/health`
+  # during local dev; production tunnels straight to the container hostname.
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+      args:
+        UID: 1000
+        GID: 1000
+    image: taskon-ingestion:0.1
+    container_name: taskon-ingestion
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      ENGINE_ROOT: /app
+      SQLITE_PATH: /app/runtime/state.db
+      RUNTIME_DIR: /app/runtime
+      LOG_DIR: /app/runtime/logs
+      PYTHONPATH: /app
+      INGESTION_PORT: 5051
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+
+    # Share the SQLite file with the engine batch container so both
+    # processes write to the same state.db.
+    volumes:
+      - ./runtime:/app/runtime
+      - ./config:/app/config:ro
+      - ./config.yaml:/app/config.yaml:ro
+      # Dev hot-reload (matches engine service mounts).
+      - ./ingestion:/app/ingestion
+      - ./lib:/app/lib
+      - ./sources:/app/sources
+      - ./jobs:/app/jobs
+
+    # Local-only port mapping; production traffic comes via Cloudflare Tunnel
+    # which dials the container hostname directly on the docker network.
+    ports:
+      - "127.0.0.1:5051:5051"
+
+    depends_on:
+      - engine
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+# No external networks/volumes declared — runtime/ is a host bind mount, which
+# keeps the data inspectable from Windows / IDE without needing
+# `docker volume inspect`.

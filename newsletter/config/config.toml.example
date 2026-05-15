@@ -1,0 +1,84 @@
+# Listmonk 主配置（v3.x）· TaskOn Newsletter
+# 复制为 config.toml 后填入真实值
+# 文档：https://listmonk.app/docs/configuration/
+
+[app]
+# Listmonk 管理后台监听
+address = "0.0.0.0:9000"
+
+# 管理员账号（W1 D3 首次部署用，部署后可在 UI 改）
+admin_username = "$LISTMONK_ADMIN_USERNAME"
+admin_password = "$LISTMONK_ADMIN_PASSWORD"
+
+[db]
+host = "listmonk-db"
+port = 5432
+user = "listmonk"
+password = "$POSTGRES_PASSWORD"
+database = "listmonk"
+ssl_mode = "disable"
+max_open = 25
+max_idle = 25
+max_lifetime = "300s"
+
+# ============================================================
+# 提醒：以下配置在 Listmonk Admin UI 设置（部署后才能改）
+# 不在 config.toml 里写，但在此文档记录预期值供参考
+# ============================================================
+
+# Listmonk UI > Settings > General
+#   "Site name"            = TaskOn Growth
+#   "Root URL"             = https://newsletter.taskon.xyz
+#   "Logo URL"             = https://newsletter.taskon.xyz/static/logo.png
+#   "Favicon URL"          = ...
+#   "From email"           = TaskOn Growth <newsletter@taskon.xyz>
+#   "Notification emails"  = ops@taskon.xyz
+
+# Listmonk UI > Settings > SMTP
+# --- W1-M3 SendGrid Free ---
+#   Host           = smtp.sendgrid.net
+#   Port           = 587
+#   Auth protocol  = LOGIN
+#   Username       = apikey
+#   Password       = <SendGrid API key>
+#   Hello hostname = newsletter.taskon.xyz
+#   Max conns      = 10
+#   Idle timeout   = 15s
+#   Wait timeout   = 5s
+#   TLS            = STARTTLS
+#   Skip TLS verify = false
+
+# --- M4+ AWS SES（M3 末切换）---
+#   Host           = email-smtp.us-east-1.amazonaws.com
+#   Port           = 587
+#   Username       = <SES SMTP username>
+#   Password       = <SES SMTP password>
+#   其他同上
+
+# Listmonk UI > Settings > Performance
+#   Concurrency           = 10        # SendGrid Free 阶段限速（W1-M3）
+#                                        切 SES 后可调到 50
+#   Batch size            = 100       # 每批 100 封
+#   Message rate          = 1         # 1 封/秒（W1-M3 warm-up 阶段保守值）
+#                                        切 SES 后可调到 14 封/秒
+
+# Listmonk UI > Settings > Privacy
+#   Track opens                  = TRUE
+#   Track clicks                 = TRUE
+#   Allow blocklist              = TRUE
+#   Allow preferences            = TRUE
+#   Allow export                 = TRUE
+#   Allow wipe                   = TRUE (GDPR 要求)
+#   Domain blocklist             = 留空（M2 后看数据加 spam 域名）
+
+# Listmonk UI > Settings > Bounces
+#   Enable bounces               = TRUE
+#   Block on hard bounce         = 1   # 1 次硬 bounce 立即剔除
+#   Block on soft bounce         = 3   # 3 次软 bounce 剔除
+#   Action on bounce             = blocklist
+
+# Listmonk UI > Webhooks（W1 D4 配）
+#   Event = "campaign.send"      → POST https://newsletter-wh.taskon.xyz/listmonk/campaign_send
+#   Event = "campaign.click"     → POST https://newsletter-wh.taskon.xyz/listmonk/click
+#   Event = "campaign.open"      → POST https://newsletter-wh.taskon.xyz/listmonk/open
+#   Event = "subscriber.bounced" → POST https://newsletter-wh.taskon.xyz/listmonk/bounce

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskon-marketing-engine"
+version = "0.1.0"
+description = "TaskOn content marketing automation engine — 10 modules + SQLite state machine"
+requires-python = ">=3.12"
+authors = [
+    { name = "TaskOn", email = "donald@taskon.xyz" },
+]
+readme = "README.md"
+license = { text = "Proprietary" }
+
+[tool.setuptools.packages.find]
+include = ["lib*", "sources*", "jobs*", "scripts*"]
+exclude = ["tests*", "newsletter*", "skills*", "plugin-src*", "dify*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # function call in default arg (FastAPI/click style)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "S"]
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "integration: end-to-end integration tests requiring real APIs",
+    "slow: tests that take >5s",
+]

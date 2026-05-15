@@ -1,0 +1,37 @@
+<!-- ================================================================
+ * shared/footer-partial.html · TaskOn 落地页家族通用 footer 片段
+ *
+ * 用途:
+ *   - V1 实施: 直接将此 HTML inline 复制到各落地页 index.html 的 </footer> 前
+ *   - V2 升级: 用 server-side include 或 client-side fetch 加载
+ *
+ * 维护说明:
+ *   - 与 taskon 主站 footer 同步
+ *   - 法律链接 (privacy / terms) 必须保留
+ *
+ * 依赖样式:
+ *   - taskon-base.css :: .site-footer / .footer-row / .footer-brand / .footer-links / .footer-social / .footer-copyright
+ * ================================================================ -->
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <div class="footer-brand">
+        <strong>TaskOn</strong>
+        <p class="footer-tagline">The growth engine for Web3 projects.</p>
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://taskon.xyz/product">Product</a></li>
+        <li><a href="https://taskon.xyz/blog">Blog</a></li>
+        <li><a href="https://taskon.xyz/about">About</a></li>
+        <li><a href="https://taskon.xyz/privacy">Privacy</a></li>
+        <li><a href="https://taskon.xyz/terms">Terms</a></li>
+      </ul>
+      <ul class="footer-social">
+        <li><a href="https://twitter.com/TaskOnXYZ" aria-label="Twitter">𝕏</a></li>
+        <li><a href="https://t.me/TaskOnSupport" aria-label="Telegram">TG</a></li>
+      </ul>
+    </div>
+    <p class="footer-copyright">© 2026 TaskOn. All rights reserved.</p>
+  </div>
+</footer>

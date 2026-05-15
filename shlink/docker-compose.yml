@@ -1,0 +1,56 @@
+# Self-hosted shlink for UTM short-link service.
+#
+# Usage:
+#   cd D:\Taskon\marketing\engine\shlink
+#   # First-time setup: generate a random INITIAL_API_KEY (32+ chars), set it
+#   # in the .env at this directory OR export SHLINK_INITIAL_KEY in the shell.
+#   docker compose up -d
+#
+# Then in the engine .env at the project root:
+#   SHLINK_BASE_URL=http://host.docker.internal:8085
+#   SHLINK_API_KEY=<SHLINK_INITIAL_KEY>
+#
+# Restart engine container:
+#   cd ..
+#   docker compose restart engine
+#
+# Verify:
+#   docker compose exec engine python -c "from lib.shlink import shlink; \
+#       print(shlink.shorten('https://taskon.xyz/benchmark-report?utm_source=twitter&utm_medium=thread&utm_campaign=test&utm_content=donald_en&utm_term=47pct_bot'))"
+#
+# Notes:
+#   * port 8085 exposed only on 127.0.0.1 — production exposes via the engine's
+#     reverse proxy / Cloudflare Tunnel (`l.taskon.xyz`) per .env.example.
+#   * GEOLITE_LICENSE_KEY is optional — set when you have a MaxMind free key.
+#   * IS_HTTPS_ENABLED=false because the local container speaks plain HTTP;
+#     TLS termination happens upstream (CF Tunnel etc).
+
+services:
+  shlink:
+    image: shlinkio/shlink:stable
+    container_name: taskon-shlink
+    restart: unless-stopped
+    environment:
+      DEFAULT_DOMAIN: ${SHLINK_DEFAULT_DOMAIN:-l.taskon.xyz}
+      GEOLITE_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      INITIAL_API_KEY: ${SHLINK_INITIAL_KEY:?SHLINK_INITIAL_KEY must be set (e.g. export SHLINK_INITIAL_KEY=$(openssl rand -hex 32))}
+      IS_HTTPS_ENABLED: "false"
+      # Use SQLite by default — zero ops; switch to MySQL/Postgres when you
+      # outgrow it (shlink supports DB_DRIVER override).
+      DB_DRIVER: sqlite
+    volumes:
+      - ./data:/etc/shlink/data
+    ports:
+      - "127.0.0.1:8085:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
+             "http://localhost:8080/rest/health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

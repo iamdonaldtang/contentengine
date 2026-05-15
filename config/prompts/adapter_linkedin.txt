@@ -1,0 +1,22 @@
+把下面这条 X Thread 终稿改写为 LinkedIn Post。
+
+【硬要求】
+- 首段重新写，绝不复制 X 第一条语序；数字 / 反直觉结论打头。
+- 长度 1200-2500 字。数据 / 协议名 / 客户名 100% 保留。
+- 结尾以问句激活评论区（不是硬 CTA）。
+- B2B 视角：读者是 Crypto / Web2 CMO 与 Growth Lead，他们要"洞察"，不要鸡汤。
+- 立场：TaskOn 是诚实观察者；涉及自身业务（反 Sybil / Quest）必须主动披露利益。
+- 禁词：全方位 / 系统性 / 革命性 / 赋能 / 显著 / 闭环 / 颠覆 / 抓手 / 解决方案 / 价值赋能 / 战略升维 / dive into / let's explore / 综上所述。
+- 禁止三句一组排比"不是 X，不是 Y，而是 Z"。
+- 禁止装饰 emoji（🚀🔥⚡）；功能 emoji（→ ✓ ❌）每段最多 1 个。
+
+【选题卡上下文】
+piece_id: {piece_id}
+hook_type: {hook_type}
+narrative_anchor: {narrative_anchor}
+
+【X Thread 终稿】
+{xthread_content}
+
+【输出】
+纯 Markdown 正文。不要写"以下是改写版本"。不要加 # 一级标题。

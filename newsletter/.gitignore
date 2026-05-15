@@ -1,0 +1,36 @@
+# 敏感文件 - 不入 git
+.env
+config/config.toml
+*.key
+*.pem
+*-credentials.json
+
+# Docker volumes
+listmonk-uploads/
+listmonk-db-data/
+nginx-secrets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+*.sql.gz
+backups/
+
+# Logs
+*.log
+logs/

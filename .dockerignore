@@ -1,0 +1,48 @@
+# Build context exclusions — keep the image small and avoid leaking secrets.
+
+# Secrets and host-side env
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts (mounted in via volume, not baked into image)
+runtime/
+
+# Local Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Other subprojects with their own deployments
+newsletter/
+skills/
+plugin-src/
+dify/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+
+# Docker meta (already inside build context)
+.dockerignore
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml

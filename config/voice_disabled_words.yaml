@@ -1,0 +1,78 @@
+# TaskOn Marketing Engine · Voice Disabled Words
+# Loaded by jobs/voice_checker.py to flag AI-味套话 / 增长 vendor 自吹 / 廉价 CTA.
+#
+# Maintenance: append-only. Removals require Donald sign-off (some words look
+# innocent but are load-bearing markers of AI-generated drafts).
+#
+# Sections:
+#   v1_universal         — 14-word v1 list (PRD §2.2, all platforms)
+#   b2b_extension        — extra forbidden words on LinkedIn / B2B long-form
+#   youtube_extension    — extra forbidden words on YT scripts (longvideo + shorts)
+#   ai_smell_phrases     — multi-char套话 (CLAUDE.md 反 AI 味清单)
+#   cta_patterns         — used by CTA-ratio calculator (denominator = total chars)
+
+v1_universal:
+  - 全方位
+  - 系统性
+  - 革命性
+  - 赋能
+  - 显著
+  - 闭环
+  - 颠覆
+  - 抓手
+  - 全面
+  - 无缝
+  - 全栈
+  - 一站式
+  - 立刻
+  - 现在
+
+b2b_extension:
+  - 解决方案
+  - 价值赋能
+  - 战略升维
+  - 落地抓手
+  - 生态闭环
+  - 数字化转型
+  - 高效协同
+
+youtube_extension:
+  - 必看
+  - 干货满满
+  - 史上最强
+  - 全网最全
+  - 一招搞定
+
+ai_smell_phrases:
+  # 反 AI 味清单 (D:\TaskOn\marketing\CLAUDE.md §2)
+  - 在当今快速发展的
+  - 在这个日新月异的
+  - dive into
+  - let's explore
+  - let's dive
+  - 综上所述
+  - 总而言之
+  - 不仅仅是
+  # 三句一组排比模板 — 半精确匹配（命中其一即可作为信号）
+  - 不是 X，不是 Y，而是 Z
+  - 不仅是
+  - 也不仅是
+
+cta_patterns:
+  # CTA 占比 = sum(len(p)) / total_chars  (中英混合按字符计)
+  - 立即
+  - 现在
+  - 查看
+  - 点击
+  - 了解更多
+  - 立刻购买
+  - 马上注册
+  - 戳链接
+  - 链接见评论
+  - Learn more
+  - Click here
+  - Sign up
+  - Subscribe
+  - Join now
+  - Read more
+  - Get started

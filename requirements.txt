@@ -1,0 +1,40 @@
+# TaskOn Marketing Engine · Python dependencies (locked minor versions)
+# Python 3.12+
+
+# Core
+python-dotenv>=1.0,<2.0
+pyyaml>=6.0,<7.0
+requests>=2.31,<3.0
+tenacity>=8.2,<9.0           # exponential backoff retry decorator
+
+# LLM clients
+anthropic>=0.40,<1.0          # Opus 4.7 fallback
+# MiniMaxi portal uses OpenAI-compatible REST; we hit it via `requests` directly,
+# so no SDK is required for the primary path.
+
+# Data sources
+google-analytics-data>=0.18,<1.0   # GA4
+boto3>=1.34,<2.0                   # AWS SES SNS webhook signing verification
+
+# NLP
+jieba>=0.42,<1.0              # Chinese tokenizer for voice_checker
+
+# Web server (Listmonk + SES webhook + landing-page signup ingestion endpoint)
+# Flask is included in engine image too so tests/test_ingestion.py runs in
+# either container (engine cron jobs don't need flask at runtime).
+flask>=3.0,<4.0
+flask-cors>=4.0,<6.0          # CORS for landing-page JS calling ingest.taskon.xyz from taskon.xyz origin
+gunicorn>=21.0,<22.0          # production WSGI (Linux)
+
+# X scraping fallback (M2)
+twikit>=2.0,<3.0              # KOL Watch fallback (replaces dead snscrape/twint)
+
+# Testing
+pytest>=8.0,<9.0
+pytest-asyncio>=0.23,<1.0
+pytest-cov>=4.1,<5.0
+freezegun>=1.4,<2.0           # time mocking for cron-style tests
+
+# Dev tooling
+ruff>=0.4,<1.0
+mypy>=1.10,<2.0

@@ -1,0 +1,9 @@
+{
+  "name": "taskon-content-critic",
+  "version": "0.1.0",
+  "description": "TaskOn 外发内容（Twitter / 长文 / Newsletter）发布前辣评质检。基于第一性原理 + 批判性思维，从受众精准度、价值密度、Hook 强度、完读率结构、故事性、STEPPS 传播性、CTA 转化、标题 4U、反 AI 味、Web3 行业语境十个维度打分。",
+  "author": {
+    "name": "Donald · TaskOn"
+  },
+  "keywords": ["taskon", "content-review", "marketing", "web3", "critical-thinking"]
+}

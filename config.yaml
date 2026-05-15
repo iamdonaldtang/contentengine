@@ -1,0 +1,182 @@
+# TaskOn Marketing Engine · Non-secret configuration
+# Secrets live in .env. This file is checked into git.
+
+llm:
+  primary: minimaxi
+  fallback: anthropic
+  # Per-call defaults; can be overridden by caller.
+  default_max_tokens: 4000
+  default_temperature: 0.7
+  # If MiniMaxi returns 429/5xx N times across all 3 keys, fall back to Anthropic.
+  fallback_threshold_failures: 3
+
+sqlite:
+  # WAL mode for concurrent reads + serialized writes.
+  journal_mode: WAL
+  synchronous: NORMAL
+  busy_timeout_ms: 5000
+  # Backup retention
+  backup_keep_days: 14
+
+postiz:
+  rate_limit_per_minute: 100
+  request_timeout: 30
+  # Map platform key → Postiz integration UUID. Populate with the values from
+  # Postiz Settings → Integrations. Empty values cause schedule_planner to
+  # skip that platform with a P2 alert (no crash).
+  #
+  # Keys here MUST match the platform names produced by jobs.adapter_orchestrator
+  # (which writes drafts/<id>/<key>.md). Stay consistent across:
+  #   jobs/adapter_orchestrator → drafts/<id>/<key>.md
+  #   jobs/schedule_planner    → reads same keys
+  #   publishings.platform     → stored verbatim
+  integrations:
+    # Wave 1: 2 platforms connected 2026-05-15.
+    # Pull current UUIDs anytime:
+    #   docker compose exec engine python -c "from sources.postiz import postiz; \
+    #     [print(f\"{i['identifier']:12} {i['id']} {i['name']}\") for i in postiz.list_integrations() if not i.get('disabled')]"
+    x_thread: ""                                 # X (Twitter) — pending OAuth
+    linkedin_post: "cmp6765x60001ox9a49xf585o"   # LinkedIn · Donald Tang
+    linkedin_carousel: "cmp6765x60001ox9a49xf585o"  # same LinkedIn account, PDF carousel
+    medium_long: ""                              # Medium — pending Integration Token
+    yt_shorts: "cmp6azvuh0004n58e848712dx"       # YouTube · donaldtang
+    tiktok: ""                                   # TikTok — pending Developer approval
+    x_short: ""                                  # = x_thread when connected
+
+schedule_planner:
+  # All offsets are computed from the cron's fire time → next Monday 09:00 ET
+  # anchor → each platform's slot. ET = America/New_York (DST-aware).
+  # B1 §3.2 错峰 24h+ — these defaults match the playbook exactly.
+  timezone: "America/New_York"
+  # Map of draft-filename → (weekday, hour_local) where weekday is 0=Mon..6=Sun.
+  # The cron typically fires Sunday 22:00 (post topic_ranker + UTM gen), so
+  # the next-Monday anchor is the *upcoming* Monday — never the same-day
+  # Sunday week.
+  slots:
+    x_thread:          [0, 9]    # Mon 09:00 ET
+    linkedin_post:     [1, 9]    # Tue 09:00 ET   (X + 24h)
+    linkedin_carousel: [1, 10]   # Tue 10:00 ET
+    medium_long:       [2, 9]    # Wed 09:00 ET   (Blog double-publish — gated separately)
+    yt_shorts:         [3, 9]    # Thu 09:00 ET
+    tiktok:            [3, 10]   # Thu 10:00 ET
+  # Filenames inside runtime/drafts/<piece_id>/ that each slot reads.
+  # Defaults match adapter_orchestrator's output convention.
+  draft_filenames:
+    x_thread:          xthread_final.md
+    linkedin_post:     linkedin_post.md
+    linkedin_carousel: carousel_10pages.md
+    medium_long:       medium_long.md
+    yt_shorts:         shorts_60s.md
+    tiktok:            shorts_60s.md  # TikTok reuses Shorts script by default
+
+twitter_x:
+  rate_limit_reads_per_month: 100000  # $200/mo Premium plan
+  request_timeout: 30
+
+ga4:
+  request_timeout: 60
+  landing_pages_whitelist:
+    - /benchmark-report
+    - /free-diagnostic
+    - /growth-playbook
+
+listmonk:
+  request_timeout: 30
+
+btouch:
+  # Six touchpoint slots inside TaskOn platform
+  touchpoints:
+    - id: 1
+      name: dashboard_card
+      preferred_type: ["blog", "data_insight"]
+      utm_medium: dashboard
+    - id: 2
+      name: docs_link
+      preferred_type: ["playbook", "methodology"]
+      utm_medium: docs
+    - id: 3
+      name: changelog
+      preferred_type: ["product_update", "extended_reading"]
+      utm_medium: changelog
+    - id: 4
+      name: template_link
+      preferred_type: ["methodology", "case_study"]
+      utm_medium: template
+    - id: 5
+      name: metrics_page
+      preferred_type: ["benchmark", "data_insight"]
+      utm_medium: metrics_page
+    - id: 6
+      name: error_explain
+      preferred_type: ["methodology", "design_rationale"]
+      utm_medium: error_explain
+
+voice_checker:
+  # Length limits per platform (chars/CJK characters)
+  platforms:
+    x_thread:
+      length_max: 1400
+      cta_ratio_max: 0.15
+    x_short:
+      length_max: 280
+      cta_ratio_max: 0.10
+    linkedin_post:
+      length_max: 2500
+      cta_ratio_max: 0.15
+    linkedin_carousel:
+      length_max: 800   # 10 pages * 80 chars
+      cta_ratio_max: 0.10
+    blog:
+      length_max: 3000
+      cta_ratio_max: 0.15
+    yt_long:
+      length_max: 2500
+      cta_ratio_max: 0.15
+    yt_shorts:
+      length_max: 150
+      cta_ratio_max: 0.10
+    tiktok:
+      length_max: 150
+      cta_ratio_max: 0.10
+
+scheduler:
+  # All times in TIMEZONE (.env)
+  jobs:
+    - name: metrics_collector
+      cron: "0 20 * * *"          # daily 20:00
+      script: jobs.metrics_collector
+    - name: attribution_engine
+      cron: "0 21 * * *"          # daily 21:00
+      script: jobs.attribution_engine
+    - name: weekly_reporter
+      cron: "0 18 * * 0"          # Sunday 18:00
+      script: jobs.weekly_reporter
+    - name: monthly_reporter
+      cron: "0 19 28-31 * *"      # last days of month, check inside script
+      script: jobs.monthly_reporter
+    - name: kol_watch
+      cron: "0 10 * * 0"          # Sunday 10:00
+      script: jobs.kol_watch
+    - name: update_btouch
+      cron: "0 9 * * 1"           # Monday 09:00
+      script: jobs.update_btouch
+    - name: backup_sqlite
+      cron: "0 23 * * *"          # daily 23:00
+      script: scripts.backup_sqlite
+
+alerts:
+  # Lark alert severity → color + title
+  severity_colors:
+    P0: red
+    P1: yellow
+    P2: gray
+  # Failure thresholds
+  bounce_rate_p0: 0.005
+  complaint_rate_p0: 0.001
+
+attribution:
+  # MVP=last-touch only; V1 adds first-touch; V2 adds linear
+  model: last_touch
+  journey_window_days: 7
+  # ±20% weight adjustment for ranker
+  weight_band: 0.20

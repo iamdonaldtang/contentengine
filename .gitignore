@@ -1,0 +1,40 @@
+# ---- Secrets ----
+.env
+.env.local
+.env.production
+.env.bak.*
+
+# ---- Local Claude Code config ----
+.claude/
+
+# ---- Runtime artifacts (DB, logs, drafts, reports) ----
+runtime/
+
+# ---- Internal planning / strategy / state docs (not for public repo) ----
+Engine_Components_PRD.md
+Metrics_Collector_归因引擎_需求文档.md
+Prompt_AI系统化编程_v1.md
+todo.md
+CONTEXT.md
+LEARNINGS.md
+STATE.md
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
+# ---- Build artifacts ----
+*.egg-info/
+build/
+dist/
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp

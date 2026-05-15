@@ -1,0 +1,121 @@
+version: "3.8"
+
+# TaskOn Newsletter Engine · Listmonk 部署（v1.2 开发vs生产分离）
+#
+# ★ 此 docker-compose.yml 用于两种场景：
+#   1. 本地开发：在 E:\AILife\listmonk\ 跑（试改完不丢生产，仅本地验证）
+#   2. VPS 生产：在 /opt/taskon-newsletter 跑（24/7 真生产）
+#
+# 区别仅在 .env 中（本地开发用 dev 配置 / VPS 用 prod 配置）+ 是否启用 nginx
+# nginx 容器仅 VPS 生产启用；本地开发不需要（Donald 直连 localhost:9000）
+#
+# 启动：
+#   docker compose up -d          # 启动所有
+#   docker compose --profile prod up -d   # 含 nginx（仅 VPS）
+#
+# 首次安装 Listmonk：
+#   docker compose run --rm listmonk ./listmonk --install
+
+services:
+
+  # ============================================================
+  # PostgreSQL · Listmonk 数据库
+  # ============================================================
+  listmonk-db:
+    image: postgres:16-alpine
+    container_name: listmonk-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=listmonk
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=listmonk
+    volumes:
+      # 本地开发: ./data/postgres → 实际是 E:\AILife\listmonk\data\postgres
+      # VPS 生产: ./data/postgres → /opt/taskon-newsletter/data/postgres
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - listmonk-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U listmonk"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ============================================================
+  # Listmonk · 主服务
+  # ============================================================
+  listmonk:
+    image: listmonk/listmonk:latest
+    container_name: listmonk
+    restart: unless-stopped
+    depends_on:
+      listmonk-db:
+        condition: service_healthy
+    ports:
+      # 本地开发: 0.0.0.0:9000 (访问 http://localhost:9000)
+      # VPS 生产: 127.0.0.1:9000 (仅 nginx 反代访问 / 外网走 443)
+      - "${LISTMONK_BIND:-127.0.0.1:9000}:9000"
+    volumes:
+      - ./config/config.toml:/listmonk/config.toml:ro
+      - ./templates:/listmonk/static/public/templates:ro
+      - ./data/uploads:/listmonk/uploads
+    environment:
+      - LISTMONK_app__admin_username=${LISTMONK_ADMIN_USERNAME}
+      - LISTMONK_app__admin_password=${LISTMONK_ADMIN_PASSWORD}
+    networks:
+      - listmonk-net
+    command: ["./listmonk"]
+
+  # ============================================================
+  # Webhook Server · 接 Listmonk + SES SNS webhook
+  # HTTP 转发到 Donald 桌面 ingestion endpoint（写 SQLite）
+  # ============================================================
+  webhook_server:
+    build: ./webhook_server
+    container_name: newsletter-webhook
+    restart: unless-stopped
+    ports:
+      - "${WEBHOOK_BIND:-127.0.0.1:5050}:5050"
+    environment:
+      # 关键：Donald 桌面 ingestion endpoint URL（通过 Cloudflare Tunnel 暴露）
+      - DONALD_DESKTOP_INGESTION_URL=${DONALD_DESKTOP_INGESTION_URL}
+      - WEBHOOK_SHARED_SECRET=${WEBHOOK_SHARED_SECRET}
+      - LARK_WEBHOOK_URL=${LARK_WEBHOOK_URL}
+      # 转发失败的事件写本地 JSONL（兼职女生补抓）
+      - FAILED_EVENTS_JSONL=/app/data/failed_events.jsonl
+    volumes:
+      - ./webhook_server:/app:ro
+      - ./data/webhook:/app/data
+    networks:
+      - listmonk-net
+    depends_on:
+      - listmonk
+
+  # ============================================================
+  # Nginx · 反向代理 + Let's Encrypt TLS（仅 VPS 生产启用）
+  # ============================================================
+  nginx:
+    image: jonasal/nginx-certbot:latest
+    container_name: newsletter-nginx
+    restart: unless-stopped
+    profiles: ["prod"]    # 只有 --profile prod 才启动
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/user_conf.d:ro
+      - nginx-secrets:/etc/letsencrypt
+    depends_on:
+      - listmonk
+      - webhook_server
+    networks:
+      - listmonk-net
+
+volumes:
+  nginx-secrets:
+
+networks:
+  listmonk-net:
+    driver: bridge

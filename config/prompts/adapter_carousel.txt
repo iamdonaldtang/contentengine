@@ -1,0 +1,30 @@
+把下面这条 X Thread 终稿压缩为 LinkedIn Carousel 10 页脚本。
+
+【硬要求】
+- 必须恰好 10 页，多 1 少 1 都算失败。
+- 每页 ≤ 80 字（含标点），标题 ≤ 12 字。
+- 节奏分配：
+  P1   钩子 —— 反直觉数字
+  P2-5 数据铺垫 —— 4 个数据点 / 案例 / 对比
+  P6-8 转折分析 —— 解释为什么 / 揭示矛盾
+  P9   结论 —— 一句话可执行判断
+  P10  反讽收尾 + 软留口（不要硬 CTA，"评论区聊聊"或"你怎么看"即可）
+- 首页（P1）不得复制 X 第一条语序。
+- 数字 / 协议名 / 客户名 100% 保留。
+- 禁词、禁三句排比、禁装饰 emoji 同 LinkedIn 列表。
+
+【选题卡上下文】
+piece_id: {piece_id}
+hook_type: {hook_type}
+narrative_anchor: {narrative_anchor}
+
+【X Thread 终稿】
+{xthread_content}
+
+【输出格式（严格 YAML，不要别的）】
+pages:
+  - title: "标题 ≤12 字"
+    body:  "正文 ≤80 字"
+  - title: "..."
+    body:  "..."
+  # ... 共 10 项

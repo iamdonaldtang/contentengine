@@ -1,0 +1,28 @@
+<!--
+  公共 footer · 嵌入所有邮件底部
+  CAN-SPAM 合规：必须有 unsubscribe + 公司地址
+-->
+<div style="background: #f6f9fc; padding: 20px; font-size: 12px; color: #666;
+            margin-top: 32px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;">
+
+  <p>
+    你收到这封邮件，因为你曾通过 <a href="https://taskon.xyz" style="color: #666;">taskon.xyz</a>
+    留下邮箱或与 TaskOn 团队有过商务接触。
+  </p>
+
+  <p>
+    <strong>TaskOn Growth Inc.</strong><br>
+    <em>{{ Company_Address }}</em>
+  </p>
+
+  <p>
+    <a href="{{ UnsubscribeURL }}" style="color: #666;">退订此邮件</a> |
+    <a href="{{ MessageURL }}" style="color: #666;">在浏览器中查看</a> |
+    <a href="{{ ManageURL }}" style="color: #666;">订阅偏好设置</a>
+  </p>
+
+  <p style="margin-top: 12px; font-size: 11px;">
+    本邮件由 TaskOn Newsletter Engine 发送 · Campaign ID: {{ Campaign_ID }}
+  </p>
+
+</div>
