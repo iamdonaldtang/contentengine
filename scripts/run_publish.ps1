@@ -60,9 +60,9 @@ docker compose exec engine python -m scripts.publish_immediate `
 Write-Host "`n[4/4] publishings 表确认..." -ForegroundColor Yellow
 docker compose exec engine python -c @"
 from lib.db import db
-rows = db.fetchall('SELECT platform,postiz_post_id,scheduled_at,utm_campaign,state FROM publishings WHERE piece_id=? ORDER BY id DESC', ('$PieceId',))
+rows = db.fetchall('SELECT platform,postiz_post_id,published_at,utm_campaign FROM publishings WHERE piece_id=? ORDER BY id DESC', ('$PieceId',))
 for r in rows:
-    print(f'  {r[\"platform\"]:<20} state={r[\"state\"]:<12} scheduled_at={r[\"scheduled_at\"]} postiz_id={r[\"postiz_post_id\"]}')
+    print(f'  {r[\"platform\"]:<20} published_at={r[\"published_at\"] or \"(pending Postiz)\"} utm={r[\"utm_campaign\"] or \"-\"} postiz_id={r[\"postiz_post_id\"]}')
 "@
 
 Write-Host "`n=== ✓ 真排程完成 · 5min 后 Postiz 真发 ===" -ForegroundColor Green

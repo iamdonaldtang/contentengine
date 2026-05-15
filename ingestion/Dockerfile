@@ -33,14 +33,15 @@ RUN apt-get update \
  && ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime \
  && rm -rf /var/lib/apt/lists/*
 
-# Minimal Python deps — only what ingestion needs.
+# Python deps — single source of truth is the engine root requirements.txt
+# (same file the engine container uses). Build context is the engine root,
+# see docker-compose.yml `context: .`. Ingestion runtime only touches
+# flask / flask-cors / gunicorn / requests / python-dotenv / pyyaml, but
+# installing the full file avoids drift between Dockerfile and requirements.txt
+# (the bug that left flask_cors uninstalled and CORS broken until 2026-05-15).
+COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
- && pip install \
-        "flask>=3.0,<4.0" \
-        "gunicorn>=21.0,<22.0" \
-        "requests>=2.31,<3.0" \
-        "python-dotenv>=1.0,<2.0" \
-        "pyyaml>=6.0,<7.0"
+ && pip install -r /app/requirements.txt
 
 # Non-root runtime user.
 ARG UID=1000
@@ -71,9 +72,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # tini → gunicorn → flask app.
 ENTRYPOINT ["/usr/bin/tini", "--"]
+# --timeout 120: requirements.txt now pulls anthropic/boto3/google-libs/etc.,
+# so first-worker cold-start can exceed gunicorn's 30s default and trip
+# WORKER TIMEOUT → SIGKILL. 120s covers the slow import chain with margin.
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5051", \
      "--workers", "2", \
+     "--timeout", "120", \
      "--access-logfile", "-", \
      "--error-logfile", "-", \
      "ingestion.wsgi:app"]

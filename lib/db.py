@@ -359,7 +359,7 @@ class _PiecesAdapter:
     def _normalize_card(card: str | dict) -> str:
         """Return a canonical JSON string regardless of YAML/JSON/dict input."""
         if isinstance(card, dict):
-            return json.dumps(card, ensure_ascii=False)
+            return json.dumps(card, ensure_ascii=False, default=str)
         text = str(card).strip()
         # Try JSON first (cheap path); fall back to YAML.
         try:
@@ -375,7 +375,13 @@ class _PiecesAdapter:
             # Preserve the original text under a wrapper so json_extract calls
             # don't crash but the data is still inspectable.
             obj = {"_raw": text}
-        return json.dumps(obj, ensure_ascii=False)
+        # default=str makes date / datetime / Path / Decimal etc. serializable
+        # — YAML parsing in particular returns ``datetime.date`` for unquoted
+        # ISO dates in the selection card, and naive json.dumps() raises
+        # TypeError. Stringifying is lossy but consistent (callers re-parse
+        # the JSON; date strings remain valid ISO and are queryable via
+        # SQLite's json_extract for attribution_engine).
+        return json.dumps(obj, ensure_ascii=False, default=str)
 
     def update_state(self, piece_id: str, new_state: str, actor: str = "system", notes: str | None = None) -> None:
         old = self._db.fetchone("SELECT state FROM pieces WHERE id = ?", (piece_id,))

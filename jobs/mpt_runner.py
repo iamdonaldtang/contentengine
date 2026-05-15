@@ -26,6 +26,7 @@ import argparse
 import datetime as dt
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -68,6 +69,34 @@ def _drafts_dir() -> Path:
 
 def _piece_dir(piece_id: str) -> Path:
     return _drafts_dir() / piece_id
+
+
+# Matches "## 纯旁白稿", "### narration only", "## TTS input" etc.
+# Authors write shorts_60s.md as a tri-track script (VISUAL / VOICE / SUBTITLE
+# per timing block), then append a "## 纯旁白稿（MPT TTS 输入用）" section that
+# contains the narration prose alone. Without this extraction MPT reads aloud
+# every [VISUAL] / [SUBTITLE] marker — wasting audio time and breaking the
+# Azure TTS subtitle alignment (root caused 2026-05-15).
+_NARRATION_HEADER_RE = re.compile(
+    r"(?im)^[ \t]*#{1,4}[ \t]*(?:纯旁白稿|narration only|narration-only|tts input)\b.*?$"
+)
+
+
+def _extract_narration(script: str) -> str:
+    """Return only the TTS-ready narration paragraph(s) from a shorts script.
+
+    If no narration-section header is present we return the input unchanged
+    (back-compat with older single-track scripts). HTML comments inside the
+    narration body are stripped because authors sometimes leave
+    ``<!-- sources: ... -->`` blocks that the TTS would otherwise vocalize.
+    """
+    match = _NARRATION_HEADER_RE.search(script)
+    if not match:
+        return script
+    body = script[match.end():]
+    # Drop HTML comments (e.g. sources blocks). DOTALL so they can span lines.
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.DOTALL)
+    return body.strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -116,16 +145,31 @@ def run(
         _record_heartbeat("warning", started_at, error_message=msg, rows=0)
         return {"piece_id": piece_id, "status": "skipped", "reason": "empty_script", "script_path": str(script_path)}
 
+    narration = _extract_narration(script)
+    if not narration:
+        msg = f"shorts script has no narration after extraction: {script_path}"
+        logger.warning(msg)
+        alert("P1", f"mpt_runner: {msg}", {"piece_id": piece_id})
+        _record_heartbeat("warning", started_at, error_message=msg, rows=0)
+        return {"piece_id": piece_id, "status": "skipped", "reason": "no_narration", "script_path": str(script_path)}
+
+    if narration is not script:
+        logger.info(
+            "extracted narration · piece=%s · %d chars from %d-char script",
+            piece_id, len(narration), len(script),
+        )
+
     if dry_run:
         logger.info(
-            "DRY-RUN · piece=%s would submit %d-char script to %s "
+            "DRY-RUN · piece=%s would submit %d-char narration to %s "
             "(voice=%s, resolution=%s, target=%s)",
-            piece_id, len(script), mpt.base_url, voice, resolution, mp4_path,
+            piece_id, len(narration), mpt.base_url, voice, resolution, mp4_path,
         )
         return {
             "piece_id": piece_id,
             "status": "dry_run",
             "script_chars": len(script),
+            "narration_chars": len(narration),
             "target_path": str(mp4_path),
             "voice": voice,
             "resolution": resolution,
@@ -133,7 +177,7 @@ def run(
 
     # ---- Submit ---- #
     try:
-        task_id = mpt.submit_video(script, voice=voice, resolution=resolution)
+        task_id = mpt.submit_video(narration, voice=voice, resolution=resolution)
     except MPTError as exc:
         logger.exception("MPT submit failed for piece=%s: %s", piece_id, exc)
         alert("P1", f"mpt_runner submit failed for {piece_id}", {"error": str(exc)[:300]})

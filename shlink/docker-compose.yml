@@ -43,8 +43,13 @@ services:
     ports:
       - "127.0.0.1:8085:8080"
     healthcheck:
+      # Shlink 5.x ships /rest/v2/health (and /rest/v3/health). The bare
+      # /rest/health path 404s. Also use 127.0.0.1 (not localhost) — busybox
+      # wget inside the image resolves `localhost` to ::1 (IPv6) and shlink
+      # only listens on 0.0.0.0:8080 (IPv4), so IPv6 → Connection refused
+      # and wget doesn't fall back to IPv4. (root caused 2026-05-15)
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
-             "http://localhost:8080/rest/health"]
+             "http://127.0.0.1:8080/rest/v2/health"]
       interval: 60s
       timeout: 5s
       retries: 3

@@ -378,6 +378,43 @@ def _persist_publishing(
 # --------------------------------------------------------------------------- #
 
 
+def _ensure_piece_in_db(piece_id: str) -> None:
+    """Bootstrap a missing piece row from the on-disk selection_card.yaml.
+
+    Manual runbooks (e.g. ``scripts/run_publish.ps1``) skip the normal
+    piece-creation pipeline and jump straight to publishing. Without this
+    defensive bootstrap, the publishings + state_events FK to pieces(id)
+    fires a ``FOREIGN KEY constraint failed`` IntegrityError when we try
+    to persist the Postiz response.
+    """
+    if db.pieces.get(piece_id) is not None:
+        return
+    card_path = _drafts_dir() / piece_id / "selection_card.yaml"
+    if not card_path.exists():
+        raise RuntimeError(
+            f"piece {piece_id!r} not in DB and no selection_card.yaml at "
+            f"{card_path} — cannot bootstrap"
+        )
+    logger.warning(
+        "bootstrap: creating piece=%s from on-disk selection_card.yaml",
+        piece_id,
+    )
+    db.pieces.create(
+        piece_id,
+        card_path.read_text(encoding="utf-8"),
+        actor="schedule_planner.bootstrap",
+    )
+    # Jump straight to 'reviewed' so the state_events log in
+    # _persist_publishing (from_state='reviewed' → 'scheduled') tells the
+    # truth instead of recording a phantom transition.
+    db.pieces.update_state(
+        piece_id,
+        "reviewed",
+        actor="schedule_planner.bootstrap",
+        notes="auto-promoted by schedule_planner; piece missing from DB",
+    )
+
+
 def run(
     piece_id: str,
     *,
@@ -396,6 +433,9 @@ def run(
     """
     started_at = time.monotonic()
     cfg = _load_config()
+
+    if not dry_run:
+        _ensure_piece_in_db(piece_id)
 
     plans = build_schedule(piece_id, base_monday=base_monday, cfg=cfg)
     scheduled = 0

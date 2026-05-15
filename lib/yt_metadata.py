@@ -298,7 +298,10 @@ def _try_derive_via_llm(
     try:
         raw = llm.complete_json(
             system=system_prompt,
-            user=json.dumps(user_payload, ensure_ascii=False, indent=2),
+            # default=str so YAML-parsed datetime.date inside selection_card
+            # doesn't crash json.dumps (same root cause as the bootstrap path
+            # in lib/db._normalize_card · 2026-05-15).
+            user=json.dumps(user_payload, ensure_ascii=False, indent=2, default=str),
             schema_hint=(
                 '{title: str (≤95 chars), description: str (≤5000), '
                 'privacy: "public"|"unlisted"|"private", tags: list[str ≤8], '
