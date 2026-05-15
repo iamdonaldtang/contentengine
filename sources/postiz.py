@@ -62,7 +62,10 @@ class PostizClient:
         timeout: HTTP timeout for every request, in seconds.
     """
 
-    timeout: int = 30
+    # 90s (was 30s): YT Shorts /api/public/v1/posts upload path can read-timeout
+    # at 30s on first call (Postiz cold-warm + media upstream). Bumped 2026-05-15
+    # after publish_immediate piece 02 yt_shorts timed out mid-call.
+    timeout: int = 90
 
     def __init__(self) -> None:
         self.base_url: str = (os.environ.get("POSTIZ_BASE_URL") or "").rstrip("/")

@@ -23,10 +23,26 @@ try {
 Write-Host "`n=== [4/5] LLM 通信测试 ===" -ForegroundColor Cyan
 docker compose exec engine python -c "from lib.llm_client import llm; print('LLM:', llm.complete('test','say hi in 3 chars'))" 2>&1
 
-Write-Host "`n=== [5/5] 关键 env 已配齐? ===" -ForegroundColor Cyan
-docker compose exec engine sh -c 'for k in POSTIZ_API_KEY X_BEARER_TOKEN SHLINK_API_KEY LARK_WEBHOOK_URL MINIMAX_API_KEY; do v=$(printenv $k); if [ -n "$v" ]; then echo "  [OK]  $k=<set>"; else echo "  [!!]  $k=<MISSING>"; fi; done'
+Write-Host "`n=== [5/5] env check ===" -ForegroundColor Cyan
+$envCheck = @'
+for k in POSTIZ_API_KEY X_BEARER_TOKEN SHLINK_API_KEY LARK_WEBHOOK_URL MINIMAX_API_KEY TWIKIT_USERNAME TWIKIT_PASSWORD; do
+  v=$(printenv $k)
+  if [ -n "$v" ]; then
+    echo "  [OK]  $k=<set, ${#v} chars>"
+  else
+    echo "  [!!]  $k=<MISSING>"
+  fi
+done
+'@
+docker compose exec engine sh -c $envCheck
 
-Write-Host "`n=== heartbeat 最近 10 个 job ===" -ForegroundColor Cyan
-docker compose exec engine python -c "from lib.db import db; [print(f'  {r[\"job_name\"]:<28} status={r[\"status\"]:<8} last={r[\"last_run_at\"]}') for r in db.fetchall('SELECT job_name,last_run_at,status FROM heartbeat ORDER BY last_run_at DESC LIMIT 10')]"
+Write-Host "`n=== heartbeat last 10 jobs ===" -ForegroundColor Cyan
+$heartbeatQuery = @'
+from lib.db import db
+rows = db.fetchall("SELECT job_name, last_run_at, status FROM heartbeat ORDER BY last_run_at DESC LIMIT 10")
+for r in rows:
+    print(f"  {r['job_name']:<28} status={r['status']:<8} last={r['last_run_at']}")
+'@
+docker compose exec engine python -c $heartbeatQuery
 
 Write-Host "`n=== 完成 ===" -ForegroundColor Green

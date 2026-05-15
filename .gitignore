@@ -34,6 +34,13 @@ htmlcov/
 build/
 dist/
 !landing_pages/dist/
+landing_pages/dist.zip
+
+# ---- Shlink runtime DB (sqlite written by container; never source-of-truth) ----
+shlink/data/database.sqlite
+shlink/data/database.sqlite-journal
+shlink/data/database.sqlite-wal
+shlink/data/database.sqlite-shm
 
 # ---- Editor / IDE ----
 .vscode/

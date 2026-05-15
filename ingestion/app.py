@@ -45,6 +45,10 @@ from lib.db import db
 from lib.lark import alert as lark_alert
 from lib.utm import parse_utm
 
+# Admin API Blueprint — Bearer-protected admin endpoints for Cowork remote control.
+# Mounted at /admin/*. Disabled unless ADMIN_API_TOKEN env var is set (safe default).
+from ingestion.admin_routes import admin_bp
+
 
 # --------------------------------------------------------------------------- #
 # Logging — single-line JSON to stdout so docker/CF log aggregation works.
@@ -120,11 +124,18 @@ CORS(
             "methods": ["POST", "OPTIONS"],
             "allow_headers": ["Content-Type", "X-Requested-With", "X-Signature"],
             "expose_headers": [],
-            "supports_credentials": False,
+            # ★ landing_form_submit.js uses fetch({credentials:'include'}) so
+            # CORS must echo Access-Control-Allow-Credentials: true. This is
+            # safe because _cors_origins is an explicit allow-list (no '*').
+            "supports_credentials": True,
             "max_age": 3600,
         },
     },
 )
+
+# Register admin Blueprint (Bearer-protected, /admin/* prefix).
+# All admin routes are no-op (401) unless ADMIN_API_TOKEN env var is configured.
+app.register_blueprint(admin_bp)
 
 
 # --------------------------------------------------------------------------- #
