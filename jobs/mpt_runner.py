@@ -67,7 +67,9 @@ JOB_NAME = "mpt_runner"
 
 CALLBACK_URL_ENV = "MPT_CALLBACK_URL"
 CALLBACK_SECRET_ENV = "MPT_CALLBACK_SECRET"
-DEFAULT_CALLBACK_URL = "http://taskon-engine:5051/api/mpt-callback"
+# The Flask app hosting /api/mpt-callback lives in `taskon-ingestion`, not
+# `taskon-engine` (the cron worker has no HTTP). Verified 2026-05-16 S7 E2E.
+DEFAULT_CALLBACK_URL = "http://taskon-ingestion:5051/api/mpt-callback"
 
 
 # --------------------------------------------------------------------------- #

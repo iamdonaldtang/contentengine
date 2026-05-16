@@ -51,7 +51,7 @@ def test_runner_happy_path_submits_and_exits(
 ) -> None:
     monkeypatch.setenv("DRAFTS_DIR", str(tmp_path / "drafts"))
     monkeypatch.setenv("MPT_CALLBACK_SECRET", "test-secret")
-    monkeypatch.setenv("MPT_CALLBACK_URL", "http://taskon-engine:5051/api/mpt-callback")
+    monkeypatch.setenv("MPT_CALLBACK_URL", "http://taskon-ingestion:5051/api/mpt-callback")
 
     runner = _reload_runner()
     _seed_piece_and_script(
@@ -80,7 +80,7 @@ def test_runner_happy_path_submits_and_exits(
     assert row["piece_id"] == "p-happy"
 
     # Callback fields forwarded to MPT
-    assert captured["kwargs"]["callback_url"] == "http://taskon-engine:5051/api/mpt-callback"
+    assert captured["kwargs"]["callback_url"] == "http://taskon-ingestion:5051/api/mpt-callback"
     assert captured["kwargs"]["callback_secret"] == "test-secret"
 
     # Narration was extracted (header stripped)

@@ -114,6 +114,11 @@ services:
       ENGINE_ROOT: /app
       SQLITE_PATH: /app/runtime/state.db
       RUNTIME_DIR: /app/runtime
+      # ★ DRAFTS_DIR must override .env's host-side D:/... path; without this
+      # override the MPT callback handler's download thread tries to write to
+      # Path("D:/Taskon/...") which Linux treats as relative — mp4 lands at
+      # /app/D:/Taskon/... (a nested garbage path). Verified 2026-05-16 S7 E2E.
+      DRAFTS_DIR: /app/runtime/drafts
       LOG_DIR: /app/runtime/logs
       PYTHONPATH: /app
       INGESTION_PORT: 5051

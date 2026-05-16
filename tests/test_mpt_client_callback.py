@@ -74,12 +74,12 @@ def test_submit_video_callback_mode_includes_both_keys(monkeypatch: pytest.Monke
     client = mpt.MPTClient()
     client.submit_video(
         "测试旁白",
-        callback_url="http://taskon-engine:5051/api/mpt-callback",
+        callback_url="http://taskon-ingestion:5051/api/mpt-callback",
         callback_secret="s3cr3t-32-bytes-xxxxxxxxxxxxxxxx",
     )
 
     body = captured[0]["body"]
-    assert body["callback_url"] == "http://taskon-engine:5051/api/mpt-callback"
+    assert body["callback_url"] == "http://taskon-ingestion:5051/api/mpt-callback"
     assert body["callback_secret"] == "s3cr3t-32-bytes-xxxxxxxxxxxxxxxx"
 
 
@@ -162,7 +162,7 @@ def test_submit_video_callback_secret_not_logged(
     with caplog.at_level(logging.DEBUG, logger="sources.mpt"):
         client.submit_video(
             "x",
-            callback_url="http://taskon-engine:5051/api/mpt-callback",
+            callback_url="http://taskon-ingestion:5051/api/mpt-callback",
             callback_secret=secret,
         )
 
@@ -171,7 +171,7 @@ def test_submit_video_callback_secret_not_logged(
     assert secret not in full_text, f"secret leaked into logs:\n{full_text}"
 
     # But the host part should be logged for ops.
-    assert "callback_host=http://taskon-engine:5051" in full_text
+    assert "callback_host=http://taskon-ingestion:5051" in full_text
 
 
 def test_submit_video_query_string_in_callback_url_not_fully_logged(
