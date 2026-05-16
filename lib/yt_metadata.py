@@ -93,14 +93,18 @@ class YouTubeMetadata:
             * title           — video title
             * description     — video description (NOT body!)
             * type            — privacy: public|unlisted|private
-            * tags            — list[str]
+            * tags            — list[{value: str, label: str}]; Postiz's
+              @ValidateNested rejects flat strings AND objects missing either
+              key (verified 2026-05-16 S9.4 HTTP 400 × 2). The tag-input
+              DTO requires both fields; the YouTube provider then maps
+              them to YT API's flat string tags internally.
             * thumbnail       — URL or path Postiz can read
         """
         settings: dict[str, Any] = {
             "title": self.title,
             "description": self.description,
             "type": self.privacy,
-            "tags": list(self.tags),
+            "tags": [{"value": t, "label": t} for t in self.tags],
             "category": self.category_id,
             "notMadeForKids": self.not_made_for_kids,
         }

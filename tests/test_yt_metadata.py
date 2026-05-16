@@ -140,12 +140,17 @@ def test_llm_derives_and_persists_auto_yaml(
     assert persisted["source"] == "llm_auto"
     assert persisted["title"] == meta.title
 
-    # Postiz settings shape is correct
+    # Postiz settings shape is correct — tags must be [{value: str, label: str}]
+    # per Postiz @ValidateNested rules (S9.4 2026-05-16 fix; both keys required).
     settings = meta.to_postiz_settings()
     assert settings["title"] == meta.title
     assert settings["description"] == meta.description
     assert settings["type"] == "public"
-    assert settings["tags"] == list(meta.tags)
+    assert settings["tags"] == [{"value": t, "label": t} for t in meta.tags]
+    assert all(
+        isinstance(t, dict) and "value" in t and "label" in t
+        for t in settings["tags"]
+    )
     assert settings["notMadeForKids"] is True
 
 
