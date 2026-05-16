@@ -57,8 +57,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.db import db  # noqa: E402
 from lib.lark import alert  # noqa: E402
+from lib.media_url import MediaUrlConfigError, sign_media_url  # noqa: E402
 from lib.yt_metadata import YouTubeMetadata, load_or_derive  # noqa: E402
 from sources.postiz import PostizError, postiz  # noqa: E402
+
+
+# Platforms that require an mp4 attachment for Postiz publishing. The mp4 lives
+# at runtime/drafts/<piece_id>/shorts_60s.mp4 (mpt_runner / mpt callback writes).
+# schedule_planner signs a short-lived URL via lib.media_url and passes it to
+# postiz.create_post(media_urls=...) so Postiz can fetch it through the
+# cloudflared tunnel. Without media_urls, Postiz YT provider crashes with
+# "TypeError: Invalid URL" (verified 2026-05-16 piece-02 S9.5).
+_VIDEO_PLATFORMS: frozenset[str] = frozenset({"yt_shorts", "yt_long", "tiktok"})
+_VIDEO_MEDIA_FILENAME = "shorts_60s.mp4"
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +485,48 @@ def run(
                 logger.exception("yt_metadata load_or_derive failed for %s: %s", piece_id, exc)
                 yt_meta_label = f"yt_meta=ERR ({type(exc).__name__})"
 
+        # Video platforms need a media URL Postiz can fetch. Without it, the
+        # YouTube provider crashes with "TypeError: Invalid URL". We sign a
+        # short-lived URL on the existing cloudflared tunnel so Postiz can
+        # pull the mp4 directly from engine's disk.
+        media_urls: list[str] | None = None
+        if plat in _VIDEO_PLATFORMS:
+            mp4_path = _drafts_dir() / piece_id / _VIDEO_MEDIA_FILENAME
+            if not mp4_path.is_file():
+                # mp4 hasn't been rendered yet (mpt_runner pending or failed).
+                # Skip this platform rather than letting Postiz throw a cryptic
+                # error 10 min later when the post fires.
+                failures += 1
+                results.append({
+                    "platform": plat,
+                    "status": "failed",
+                    "error": f"no media file at {mp4_path} — mpt_runner not yet completed",
+                })
+                logger.warning(
+                    "skip %s for piece=%s: missing %s (mpt_runner still pending?)",
+                    plat, piece_id, _VIDEO_MEDIA_FILENAME,
+                )
+                continue
+            try:
+                media_urls = [sign_media_url(piece_id, _VIDEO_MEDIA_FILENAME)]
+            except (MediaUrlConfigError, ValueError) as exc:
+                failures += 1
+                results.append({
+                    "platform": plat,
+                    "status": "failed",
+                    "error": f"media URL signing failed: {exc}",
+                })
+                logger.exception("sign_media_url failed for piece=%s: %s", piece_id, exc)
+                try:
+                    alert(
+                        "P0",
+                        f"schedule_planner: cannot sign media URL for {piece_id}/{plat}",
+                        {"error": str(exc)[:300]},
+                    )
+                except Exception:
+                    logger.exception("alert() emission failed")
+                continue
+
         if dry_run:
             logger.info(
                 "DRY-RUN · piece=%s platform=%s scheduled_at=%s utm_campaign=%s integration=%s %s",
@@ -500,6 +553,7 @@ def run(
                 integration_id=plan["integration_id"],
                 content=plan["content"],
                 scheduled_at=plan["scheduled_at"],
+                media_urls=media_urls,
                 extra_settings=extra_settings or None,
             )
             pub_id = _persist_publishing(piece_id, plan, resp)

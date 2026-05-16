@@ -65,6 +65,14 @@ def _seed_piece_drafts(
         if fname in drop_files:
             continue
         (piece_dir / fname).write_text(body, encoding="utf-8")
+    # ★ shorts_60s.mp4 dummy: schedule_planner now fails yt_shorts/tiktok if
+    # the mp4 is missing (Postiz would otherwise throw "TypeError: Invalid URL"
+    # at publish time). A 1-byte placeholder is enough — the planner only
+    # checks ``Path.is_file()`` to decide whether to sign a media URL.
+    # Tests can pass drop_files=("shorts_60s.mp4",) to exercise the
+    # missing-media failure path.
+    if "shorts_60s.mp4" not in drop_files:
+        (piece_dir / "shorts_60s.mp4").write_bytes(b"\x00")
     if with_utm_links:
         utm = {
             "twitter": {"campaign": "2026w19_thread01", "content": "donald_en", "term": "47pct_bot"},

@@ -54,6 +54,11 @@ from ingestion.admin_routes import admin_bp
 # unless MPT_CALLBACK_SECRET env var is set (safe default).
 from ingestion.mpt_callback import mpt_cb_bp
 
+# Media-serve Blueprint — public signed-URL endpoint at /api/media/<piece>/<file>.
+# Postiz YouTube provider fetches mp4 from this route via the cloudflared tunnel.
+# HMAC-signed URLs only; unsigned access returns 401. (2026-05-16 piece-02 fix.)
+from ingestion.media_routes import media_bp
+
 
 # --------------------------------------------------------------------------- #
 # Logging — single-line JSON to stdout so docker/CF log aggregation works.
@@ -145,6 +150,10 @@ app.register_blueprint(admin_bp)
 # Register MPT callback Blueprint (/api/mpt-callback). Returns 503 if
 # MPT_CALLBACK_SECRET env is not set (safe default — endpoint disabled).
 app.register_blueprint(mpt_cb_bp)
+
+# Register signed-URL media Blueprint (/api/media/<piece_id>/<filename>).
+# Unsigned / stale requests rejected with 401.
+app.register_blueprint(media_bp)
 
 
 # --------------------------------------------------------------------------- #

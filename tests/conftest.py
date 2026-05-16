@@ -264,3 +264,17 @@ def _disable_lark(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENABLE_LARK_ALERTS", "false")
     # Some test routes still construct alert payloads; make absent URL safe.
     monkeypatch.setenv("LARK_WEBHOOK_URL", "")
+
+
+# --------------------------------------------------------------------------- #
+# Fake MEDIA_URL env so jobs.schedule_planner.sign_media_url doesn't crash
+# tests that don't care about the URL contents. Tests that exercise missing
+# env should monkeypatch.delenv() these explicitly.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _media_url_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default fake MEDIA_URL config — tests that need missing-env can delenv."""
+    monkeypatch.setenv("MEDIA_URL_BASE", "https://ingest.test.local")
+    monkeypatch.setenv("MEDIA_URL_SECRET", "test-media-secret-32-bytes-xxxxxxxxx")

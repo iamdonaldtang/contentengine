@@ -339,11 +339,13 @@ class PostizClient:
             scheduled_utc = scheduled_at.astimezone(dt.timezone.utc)
         iso_z = scheduled_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-        # Postiz `image` field expects list of objects in newer versions, just
-        # URLs in older. Send the URL list as-is and let Postiz coerce; if a
-        # caller hits a 400, they can switch to the {url, alt, ...} dict form
-        # via the publish() raw helper.
-        media = list(media_urls or [])
+        # Postiz `image` field expects List<MediaDto> where MediaDto requires
+        # ``{id: str, path: str}`` (verified 2026-05-16 against postiz-app's
+        # libraries/nestjs-libraries/src/dtos/media/media.dto.ts). The id only
+        # needs to be a defined string — Postiz doesn't look it up in their
+        # media table for external URLs — we use the URL itself so duplicate
+        # POSTs from the same URL get a stable id (cheap dedup signal).
+        media = [{"id": u, "path": u} for u in (media_urls or [])]
 
         payload: dict[str, Any] = {
             "type": post_type,
