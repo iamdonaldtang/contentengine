@@ -154,13 +154,20 @@ type D:\Taskon\marketing\engine\runtime\drafts\2026W20-thread01\voice_report.md
 
 如果出现 `state=needs_revision`,**兼职女生改禁词**(不是 AI 自动改 — B1 §5 关 1 红线),改完重跑 adapter。
 
-### 3.3 · 渲染 60s Shorts 视频
+### 3.3 · 渲染 60s Shorts 视频 ★ 2026-05-16 改成 async submit-and-exit
 
 ```
-docker compose exec engine python -m jobs.mpt_runner --piece-id 2026W20-thread01 --voice zh-CN-YunxiNeural-Male --timeout 900
+docker compose exec engine python -m jobs.mpt_runner --piece-id 2026W20-thread01 --voice zh-CN-YunxiNeural-Male
 ```
 
-跑 ~2-5 min(取决于 MPT 配置),产出 `drafts/2026W20-thread01/shorts_60s.mp4`(50-200 MB)。
+**< 1 秒返回**(不再阻塞 5-10 min)。命令立即写一行 `mpt_tasks` 行(`status='submitted'`)然后退出。MPT 渲染完(5-40 min)用 HMAC webhook POST 回 `/api/mpt-callback`,engine 异步下载 mp4 → `drafts/2026W20-thread01/shorts_60s.mp4`(20-50 MB)。
+
+监控渲染进度(可选):
+```
+docker compose exec engine python -c "from lib.db import db; row=db.mpt_tasks.get_in_flight_for_piece('2026W20-thread01'); print(dict(row) if row else 'done — check completed_at')"
+```
+
+⚠️ **已废弃** `--timeout` 参数(旧 sync poll 用)。dropped callback 场景由 `jobs/mpt_reconciler` 每 5 min 自愈兜底。详见 [`architecture.md §9`](architecture.md)。
 
 ---
 
@@ -181,7 +188,7 @@ docker compose exec engine python -m jobs.utm_generator \
 
 ## 5 · 准备 YouTube 元数据 (5 min · 2 选 1)
 
-### 5.1 · 选项 A · Cowork 帮你写 yt_metadata.yaml(推荐)
+### 5.1 · 选项 A · Cowork 帮你写 yt_metadata.yaml(推荐)★ 2026-05-16 改成占位符
 
 ```
 帮我为这条 piece 写 YouTube 上传元数据,落到 yt_metadata.yaml。
@@ -190,12 +197,14 @@ docker compose exec engine python -m jobs.utm_generator \
 
 【取数】
 - 从 D:\Taskon\marketing\engine\runtime\drafts\2026W20-thread01\selection_card.yaml 取 hook_type 和 narrative_anchor
-- 从 utm_links.json 里 youtube.short_url 取链接放 description 中段
 - shorts_60s.md 全文做 description 第一段的钩子复述
 
 字段:
 - title (≤95 字符,含数字钩子和"TaskOn",任一即可,不要堆)
-- description (3 段:钩子复述 60-120 字 / UTM 链接 / TaskOn CTA)
+- description (3 段:① 钩子复述 60-120 字 ② CTA 句子末尾放 {{CTA_URL}} 占位符 ③ TaskOn 引导)
+  ★ 2026-05-16 SOP 变更:**不要写真实 URL**,description 唯一的链接形式是字面量 {{CTA_URL}} —
+    schedule_planner 真发前会按 (platform, account) 替换为 utm_links.json 里的长链
+  例:`你做的是 Schwab 卖得了的还是卖不了的? 评论告诉我 -> {{CTA_URL}}`
 - privacy: public
 - tags: 5-8 个英文小写中划线 SEO 词
 - category_id: 22
@@ -204,7 +213,9 @@ docker compose exec engine python -m jobs.utm_generator \
 写好后落到 D:\Taskon\marketing\engine\runtime\drafts\2026W20-thread01\yt_metadata.yaml
 ```
 
-写完你看一眼,确认 title 不别扭。
+写完你看一眼,确认 title 不别扭 + description 含 `{{CTA_URL}}` 占位符(必须有,且通常只 1 次)。
+
+**为什么改占位符**:utm_links.json 里有 `youtube_donald_en` / `youtube_taskon_official` 两个账号,不同 piece 用不同账号 — 让 yt_metadata 写死 URL 会绑死账号。占位符 + schedule_planner 注入按 `config.yaml :: postiz.accounts` 决定哪个账号。详见 [`marketing/CLAUDE.md §4.5`](../../CLAUDE.md)。
 
 ### 5.2 · 选项 B · 让 engine LLM 派生(不动手)
 
@@ -324,3 +335,4 @@ docker compose exec engine python -m jobs.schedule_planner --piece-id 2026W20-th
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-05-15 | 首版,T14 完成后写,3 平台真发就绪状态 |
+| v0.2 | 2026-05-16 | §3.3 mpt_runner 改 async submit-and-exit (删除 `--timeout`)。§5.1 yt_metadata.yaml description 改用 `{{CTA_URL}}` 占位符(不写真实 URL)。配套 [`architecture.md §9-§10`](architecture.md) async webhook + CTA placeholder 重大改造。**piece 02 首次真上 YouTube** [es7XQWghoSM](https://www.youtube.com/watch?v=es7XQWghoSM) |
