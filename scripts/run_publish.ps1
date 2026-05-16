@@ -38,17 +38,19 @@ if (Test-Path "$pieceDir\utm_links.json") {
     exit 1
 }
 
-Write-Host "`n[2/4] mpt_runner: 渲染 shorts_60s.mp4 (2-5 min)..." -ForegroundColor Yellow
+Write-Host "`n[2/4] mpt_runner: 提交 MPT (异步 callback · A-design)..." -ForegroundColor Yellow
 docker compose exec engine python -m jobs.mpt_runner `
     --piece-id $PieceId `
-    --voice zh-CN-YunxiNeural-Male `
-    --timeout 900
+    --voice zh-CN-YunxiNeural-Male
 
+# mpt_runner now returns in <1s. The mp4 will land at $pieceDir\shorts_60s.mp4
+# in 5-10 min via the /api/mpt-callback webhook (or reconciler within +5min).
 if (Test-Path "$pieceDir\shorts_60s.mp4") {
     $mp4Size = [math]::Round((Get-Item "$pieceDir\shorts_60s.mp4").Length / 1MB, 1)
-    Write-Host "  ✓ shorts_60s.mp4 · $mp4Size MB" -ForegroundColor Green
+    Write-Host "  ✓ shorts_60s.mp4 已存在 · $mp4Size MB (旧渲染缓存)" -ForegroundColor Green
 } else {
-    Write-Host "  ⚠ shorts_60s.mp4 未生成 · YT Shorts 会自动 skip（不阻塞 LinkedIn）" -ForegroundColor Yellow
+    Write-Host "  ⓘ mp4 异步生成中 · 5-10 min 内通过 callback 落地" -ForegroundColor Cyan
+    Write-Host "    查 mpt_tasks 状态: docker compose exec engine python -c `"from lib.db import db; print(dict(db.mpt_tasks.get_in_flight_for_piece('$PieceId') or {'status':'(none)'}))`"" -ForegroundColor DarkGray
 }
 
 Write-Host "`n[3/4] publish_immediate: 绕过错峰，scheduled_at = now + $OffsetMinutes min（仅 LinkedIn + YT Shorts）..." -ForegroundColor Yellow

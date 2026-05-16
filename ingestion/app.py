@@ -49,6 +49,11 @@ from lib.utm import parse_utm
 # Mounted at /admin/*. Disabled unless ADMIN_API_TOKEN env var is set (safe default).
 from ingestion.admin_routes import admin_bp
 
+# MPT callback Blueprint — receives MoneyPrinterTurbo's async webhook on render
+# completion (A-design 2026-05-16, S3). Mounted at /api/mpt-callback. Disabled
+# unless MPT_CALLBACK_SECRET env var is set (safe default).
+from ingestion.mpt_callback import mpt_cb_bp
+
 
 # --------------------------------------------------------------------------- #
 # Logging — single-line JSON to stdout so docker/CF log aggregation works.
@@ -136,6 +141,10 @@ CORS(
 # Register admin Blueprint (Bearer-protected, /admin/* prefix).
 # All admin routes are no-op (401) unless ADMIN_API_TOKEN env var is configured.
 app.register_blueprint(admin_bp)
+
+# Register MPT callback Blueprint (/api/mpt-callback). Returns 503 if
+# MPT_CALLBACK_SECRET env is not set (safe default — endpoint disabled).
+app.register_blueprint(mpt_cb_bp)
 
 
 # --------------------------------------------------------------------------- #

@@ -54,6 +54,12 @@ def _seed_piece_drafts(
         "carousel_10pages.md": "Page 1: hook\nPage 2: data\nPage 10: CTA",
         "medium_long.md": "# Headline\n\nLong-form blog body...",
         "shorts_60s.md": "0:00 hook\n0:10 reveal data\n0:50 CTA",
+        # ★ selection_card.yaml: required by jobs.schedule_planner._ensure_piece_in_db
+        # bootstrap path (commit 9c8a146). Without this, real-mode run() in tests
+        # would raise "piece not in DB and no selection_card.yaml" before reaching
+        # the code path under test. Tests that pre-insert the piece via
+        # tmp_db.pieces.create still pass — bootstrap is a fallback, not required.
+        "selection_card.yaml": f"piece_id: {piece_id}\nhook_type: 47pct_bot\n",
     }
     for fname, body in files.items():
         if fname in drop_files:

@@ -1,29 +1,47 @@
-"""MPT Runner · short-video production cron (B1 §2.6/2.7, T4).
+"""MPT Runner · async submit-and-exit (A-design 2026-05-16).
 
-Reads ``runtime/drafts/<piece_id>/shorts_60s.md``, submits it to the local
-MoneyPrinterTurbo (MPT) API, polls until rendered, downloads the mp4 to
-``runtime/drafts/<piece_id>/shorts_60s.mp4``, and stamps the publishings
-row's ``media_path``.
+WHY THIS LOOKS DIFFERENT FROM ITS HISTORY
+-----------------------------------------
+Pre-A-design, this module did the whole render pipeline synchronously:
+submit → poll for 5-10 min → download mp4 → write publishings rows.
+That blocked engine main thread, ate cron slots, and propagated MPT
+timeouts as engine-side P1 failures.
 
-Cron position
--------------
-Sits between:
-  * Monday 09:00 — Cowork adapter_orchestrator writes shorts_60s.md
-  * Sunday 22:00 — schedule_planner picks up the mp4 for YT Shorts / TikTok
+Now mpt_runner only submits:
 
-Recommended cron: **Monday 11:00** (adapter done, before schedule_planner).
+  1. Read ``runtime/drafts/<piece_id>/shorts_60s.md`` + extract the
+     ``## 纯旁白稿`` narration block (existing logic preserved — see
+     ``_extract_narration``).
+  2. INSERT a fresh row in ``mpt_tasks`` (status='pending_submit').
+     The row exists *before* the MPT POST so the reconciler can find
+     it even if submit hangs / crashes.
+  3. POST /api/v1/videos to MPT with ``callback_url`` + ``callback_secret``
+     in the body — MPT will call us back when render finishes.
+  4. UPDATE the row to status='submitted' with the returned task_id.
+  5. Exit (< 1 sec total wall time excluding HTTP RTT).
 
-CLI
----
+Downstream:
+  * ``ingestion/api/mpt-callback`` receives MPT's webhook → atomically
+    flips status to 'completed' / 'failed' → spawns mp4 download.
+  * ``jobs/mpt_reconciler`` (cron every 5min) catches dropped callbacks.
+  * ``schedule_planner`` (Sunday 22:00) reads ``shorts_60s.md`` and posts
+    to Postiz; the mp4 file at the canonical path will exist by then
+    (single render takes 5-10 min; 11+ h buffer to Sunday).
 
-    python -m jobs.mpt_runner --piece-id 2026W19-thread01
-    python -m jobs.mpt_runner --piece-id 2026W19-thread01 --voice en-US-AriaNeural --timeout 900
-    python -m jobs.mpt_runner --piece-id 2026W19-thread01 --dry-run
+Idempotency:
+  If a piece already has an in-flight (pending_submit / submitted) row,
+  this cron tick returns immediately with status='already_in_flight'.
+  Stops cron retries from queuing duplicate renders. Override with
+  ``--force`` if the operator deliberately wants to re-submit.
+
+Hard rules (Prompt_AI系统化编程_v1.md §7):
+* No silent failures — every branch logs and either returns or alerts.
+* No catch-and-pass — exceptions either propagate (cron exit non-zero)
+  or are wrapped with a P-alert.
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import logging
 import os
 import re
@@ -40,18 +58,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.db import db  # noqa: E402
 from lib.lark import alert  # noqa: E402
-from sources.mpt import (  # noqa: E402
-    DEFAULT_RESOLUTION,
-    DEFAULT_VOICE,
-    MPTError,
-    MPTTaskFailedError,
-    MPTTimeoutError,
-    mpt,
-)
+from sources.mpt import DEFAULT_RESOLUTION, DEFAULT_VOICE, MPTError, mpt  # noqa: E402
+
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "mpt_runner"
+
+CALLBACK_URL_ENV = "MPT_CALLBACK_URL"
+CALLBACK_SECRET_ENV = "MPT_CALLBACK_SECRET"
+DEFAULT_CALLBACK_URL = "http://taskon-engine:5051/api/mpt-callback"
 
 
 # --------------------------------------------------------------------------- #
@@ -71,6 +87,10 @@ def _piece_dir(piece_id: str) -> Path:
     return _drafts_dir() / piece_id
 
 
+# --------------------------------------------------------------------------- #
+# Narration extraction (preserved from previous version)
+# --------------------------------------------------------------------------- #
+#
 # Matches "## 纯旁白稿", "### narration only", "## TTS input" etc.
 # Authors write shorts_60s.md as a tri-track script (VISUAL / VOICE / SUBTITLE
 # per timing block), then append a "## 纯旁白稿（MPT TTS 输入用）" section that
@@ -85,18 +105,42 @@ _NARRATION_HEADER_RE = re.compile(
 def _extract_narration(script: str) -> str:
     """Return only the TTS-ready narration paragraph(s) from a shorts script.
 
-    If no narration-section header is present we return the input unchanged
-    (back-compat with older single-track scripts). HTML comments inside the
-    narration body are stripped because authors sometimes leave
-    ``<!-- sources: ... -->`` blocks that the TTS would otherwise vocalize.
+    Older single-track scripts (no narration header) are returned unchanged.
+    HTML comments inside the narration body are stripped because authors
+    sometimes leave ``<!-- sources: ... -->`` blocks the TTS would vocalize.
     """
     match = _NARRATION_HEADER_RE.search(script)
     if not match:
         return script
     body = script[match.end():]
-    # Drop HTML comments (e.g. sources blocks). DOTALL so they can span lines.
     body = re.sub(r"<!--.*?-->", "", body, flags=re.DOTALL)
     return body.strip()
+
+
+# --------------------------------------------------------------------------- #
+# Callback env validation
+# --------------------------------------------------------------------------- #
+
+
+def _require_callback_config() -> tuple[str, str]:
+    """Pull (url, secret) from env. Raises RuntimeError if either missing.
+
+    The A-design async path is the only supported render path now; we don't
+    silently fall back to a sync mode because that's the bug we removed.
+    """
+    url = os.environ.get(CALLBACK_URL_ENV, "").strip() or DEFAULT_CALLBACK_URL
+    secret = os.environ.get(CALLBACK_SECRET_ENV, "").strip()
+    if not secret:
+        raise RuntimeError(
+            f"{CALLBACK_SECRET_ENV} env not set. mpt_runner requires async-callback "
+            "mode (A-design 2026-05-16). Set this env on both engine + MPT containers."
+        )
+    if not url.startswith(("http://", "https://")):
+        raise RuntimeError(
+            f"{CALLBACK_URL_ENV}={url!r} must be a full http(s) URL "
+            "(MPT cannot resolve container hostnames otherwise)."
+        )
+    return url, secret
 
 
 # --------------------------------------------------------------------------- #
@@ -109,27 +153,28 @@ def run(
     *,
     voice: str = DEFAULT_VOICE,
     resolution: str = DEFAULT_RESOLUTION,
-    timeout_seconds: int = 600,
     dry_run: bool = False,
+    force: bool = False,
     script_filename: str = "shorts_60s.md",
-    output_filename: str = "shorts_60s.mp4",
 ) -> dict[str, Any]:
-    """Render the shorts script for ``piece_id`` via MPT and persist the mp4.
+    """Submit a render task to MPT and return immediately.
 
-    Returns a summary dict (status, task_id, media_path, ...).
+    Returns a summary dict with keys:
+        status: 'submitted' | 'dry_run' | 'skipped' | 'already_in_flight' | 'failed'
+        piece_id, task_id (if submitted), mpt_task_row_id, reason (if skipped)
 
-    Failure paths:
-        * Script missing  → P1 alert, return status='skipped'
-        * MPT submit fail → P1 alert, raise (cron exit non-zero)
-        * Poll timeout    → P1 alert, raise
-        * Download fail   → fallback: persist publishings with media_path=null
-          so schedule_planner can skip TikTok / YT Shorts gracefully
+    Status semantics:
+        submitted         — POST succeeded, task_id assigned, row marked submitted
+        already_in_flight — a previous tick is still pending/submitted (return its row)
+        skipped           — input missing / empty
+        dry_run           — args.dry_run set; nothing submitted
+        failed            — submit POST raised; row marked failed
     """
     started_at = time.monotonic()
     piece_dir = _piece_dir(piece_id)
     script_path = piece_dir / script_filename
-    mp4_path = piece_dir / output_filename
 
+    # ---- Read + extract narration ---- #
     if not script_path.is_file():
         msg = f"shorts script missing: {script_path}"
         logger.warning(msg)
@@ -143,7 +188,7 @@ def run(
         logger.warning(msg)
         alert("P1", f"mpt_runner: {msg}", {"piece_id": piece_id})
         _record_heartbeat("warning", started_at, error_message=msg, rows=0)
-        return {"piece_id": piece_id, "status": "skipped", "reason": "empty_script", "script_path": str(script_path)}
+        return {"piece_id": piece_id, "status": "skipped", "reason": "empty_script"}
 
     narration = _extract_narration(script)
     if not narration:
@@ -151,7 +196,7 @@ def run(
         logger.warning(msg)
         alert("P1", f"mpt_runner: {msg}", {"piece_id": piece_id})
         _record_heartbeat("warning", started_at, error_message=msg, rows=0)
-        return {"piece_id": piece_id, "status": "skipped", "reason": "no_narration", "script_path": str(script_path)}
+        return {"piece_id": piece_id, "status": "skipped", "reason": "no_narration"}
 
     if narration is not script:
         logger.info(
@@ -159,120 +204,106 @@ def run(
             piece_id, len(narration), len(script),
         )
 
+    # ---- Dry-run early exit (no DB writes, no MPT POST) ---- #
     if dry_run:
+        # Still validate callback config so dry-run catches misconfiguration.
+        try:
+            cb_url, _ = _require_callback_config()
+        except RuntimeError as exc:
+            return {"piece_id": piece_id, "status": "failed", "reason": "config_invalid", "error": str(exc)}
         logger.info(
             "DRY-RUN · piece=%s would submit %d-char narration to %s "
-            "(voice=%s, resolution=%s, target=%s)",
-            piece_id, len(narration), mpt.base_url, voice, resolution, mp4_path,
+            "(voice=%s, resolution=%s, callback=%s)",
+            piece_id, len(narration), mpt.base_url, voice, resolution, cb_url,
         )
         return {
             "piece_id": piece_id,
             "status": "dry_run",
             "script_chars": len(script),
             "narration_chars": len(narration),
-            "target_path": str(mp4_path),
             "voice": voice,
             "resolution": resolution,
         }
 
-    # ---- Submit ---- #
+    # ---- Validate callback env BEFORE inserting mpt_tasks row ---- #
     try:
-        task_id = mpt.submit_video(narration, voice=voice, resolution=resolution)
+        callback_url, callback_secret = _require_callback_config()
+    except RuntimeError as exc:
+        logger.error("mpt_runner config invalid: %s", exc)
+        alert("P0", f"mpt_runner config invalid for {piece_id}", {"error": str(exc)[:300]})
+        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=0)
+        return {"piece_id": piece_id, "status": "failed", "reason": "config_invalid", "error": str(exc)}
+
+    # ---- Idempotency guard: another tick already submitted? ---- #
+    if not force:
+        existing = db.mpt_tasks.get_in_flight_for_piece(piece_id)
+        if existing is not None:
+            logger.info(
+                "mpt_runner: piece=%s already in flight (row_id=%d status=%s task_id=%s) — skip resubmit",
+                piece_id, existing["id"], existing["status"], existing["task_id"],
+            )
+            _record_heartbeat("ok", started_at, error_message=None, rows=0)
+            return {
+                "piece_id": piece_id,
+                "status": "already_in_flight",
+                "mpt_task_row_id": existing["id"],
+                "task_id": existing["task_id"],
+                "existing_status": existing["status"],
+            }
+
+    # ---- Insert pending_submit row BEFORE MPT POST ---- #
+    row_id = db.mpt_tasks.create_pending(piece_id)
+    logger.debug("mpt_runner: created mpt_tasks row_id=%d piece=%s", row_id, piece_id)
+
+    # ---- Submit to MPT with callback ---- #
+    try:
+        task_id = mpt.submit_video(
+            narration,
+            voice=voice,
+            resolution=resolution,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+        )
     except MPTError as exc:
         logger.exception("MPT submit failed for piece=%s: %s", piece_id, exc)
+        db.mpt_tasks.mark_submit_failed(row_id, f"{type(exc).__name__}: {exc}"[:500])
         alert("P1", f"mpt_runner submit failed for {piece_id}", {"error": str(exc)[:300]})
-        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=0)
-        raise
+        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=1)
+        return {"piece_id": piece_id, "status": "failed", "reason": "submit_error", "mpt_task_row_id": row_id, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — defensive
+        logger.exception("mpt_runner unexpected error for piece=%s", piece_id)
+        db.mpt_tasks.mark_submit_failed(row_id, f"unexpected {type(exc).__name__}: {exc}"[:500])
+        alert("P1", f"mpt_runner crashed for {piece_id}", {"error": str(exc)[:300]})
+        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=1)
+        return {"piece_id": piece_id, "status": "failed", "reason": "crash", "mpt_task_row_id": row_id, "error": str(exc)}
 
-    # ---- Poll ---- #
-    try:
-        task_info = mpt.poll_task(task_id, timeout_seconds=timeout_seconds)
-    except MPTTimeoutError as exc:
-        logger.exception("MPT poll timeout piece=%s task=%s", piece_id, task_id)
-        alert("P1", f"mpt_runner poll TIMEOUT piece={piece_id} task={task_id}", {"error": str(exc)[:300]})
-        _record_heartbeat("failed", started_at, error_message=f"timeout: {exc}", rows=0)
-        raise
-    except MPTTaskFailedError as exc:
-        logger.exception("MPT task failed piece=%s task=%s", piece_id, task_id)
-        alert("P1", f"mpt_runner task FAILED piece={piece_id} task={task_id}", {"error": str(exc)[:300]})
-        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=0)
-        raise
-    except MPTError as exc:
-        logger.exception("MPT poll error piece=%s task=%s", piece_id, task_id)
-        alert("P1", f"mpt_runner poll error piece={piece_id}", {"error": str(exc)[:300]})
-        _record_heartbeat("failed", started_at, error_message=str(exc)[:300], rows=0)
-        raise
-
-    # ---- Download (fallback to "no media" if download fails) ---- #
-    download_ok = True
-    download_err: str | None = None
-    try:
-        mpt.download_video(task_id, mp4_path)
-    except MPTError as exc:
-        download_ok = False
-        download_err = str(exc)[:300]
-        logger.warning(
-            "MPT download failed for piece=%s task=%s; persisting publishings row "
-            "WITHOUT media_path so caller can fallback: %s",
-            piece_id, task_id, exc,
+    # ---- Mark submitted ---- #
+    transition_ok = db.mpt_tasks.mark_submitted(row_id, task_id)
+    if not transition_ok:
+        # Defensive: should never happen unless something else mutated the row mid-flight.
+        logger.error(
+            "mpt_runner: mark_submitted returned False for row_id=%d task_id=%s — inspect mpt_tasks",
+            row_id, task_id,
         )
-        try:
-            db.publish_failures.insert(
-                severity="P2",
-                source=JOB_NAME,
-                failure_type="mpt_download_failed",
-                failure_detail=f"piece={piece_id} task={task_id} err={exc}",
-            )
-        except Exception:
-            logger.exception("publish_failures insert failed")
-        try:
-            alert("P2", f"mpt_runner download fallback piece={piece_id}", {"error": download_err})
-        except Exception:
-            logger.exception("alert emission failed")
+        alert("P1", f"mpt_runner mark_submitted no-op for {piece_id}",
+              {"row_id": row_id, "task_id": task_id})
 
-    # ---- Persist publishings row(s) ---- #
-    # The video powers BOTH yt_shorts and tiktok per B1 §2 default. We create
-    # a publishings row for each so the schedule_planner finds media on each.
-    media_path = str(mp4_path) if download_ok and mp4_path.is_file() else None
-    pub_rows: list[int] = []
-    for platform in ("yt_shorts", "tiktok"):
-        try:
-            pub_id = db.publishings.upsert(
-                piece_id=piece_id,
-                platform=platform,
-                external_post_id=None,
-                postiz_post_id=None,
-                published_at=None,
-                media_path=media_path,
-            )
-            pub_rows.append(pub_id)
-            db.state_events.log(
-                piece_id,
-                from_state=None,
-                to_state="drafted",
-                actor=JOB_NAME,
-                notes=f"platform={platform} task_id={task_id} media={'ok' if media_path else 'missing'}",
-            )
-        except Exception:
-            logger.exception("publishings.upsert failed for piece=%s platform=%s", piece_id, platform)
-
-    status = "ok" if download_ok else "warning"
-    file_size = mp4_path.stat().st_size if media_path else 0
-    _record_heartbeat(status, started_at, error_message=download_err, rows=len(pub_rows))
+    duration_s = int(time.monotonic() - started_at)
+    _record_heartbeat("ok", started_at, error_message=None, rows=1)
 
     summary = {
         "piece_id": piece_id,
-        "status": status,
+        "status": "submitted",
+        "mpt_task_row_id": row_id,
         "task_id": task_id,
-        "task_info_keys": (
-            list(task_info.keys())[:10] if isinstance(task_info, dict) else []
-        ),
-        "media_path": media_path,
-        "file_size_bytes": file_size,
-        "publishings_inserted": pub_rows,
-        "download_error": download_err,
+        "narration_chars": len(narration),
+        "callback_url": callback_url,
+        "duration_seconds": duration_s,
     }
-    logger.info("mpt_runner done: %s", summary)
+    logger.info(
+        "mpt_runner submitted piece=%s task_id=%s duration=%ds — waiting for callback",
+        piece_id, task_id, duration_s,
+    )
     return summary
 
 
@@ -301,13 +332,17 @@ def _record_heartbeat(status: str, started_at: float, *, error_message: str | No
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="python -m jobs.mpt_runner",
-        description="Render short-form video for a piece via MoneyPrinterTurbo (B1 §2.6/2.7).",
+        description=(
+            "Submit a piece's shorts narration to MoneyPrinterTurbo. "
+            "Returns immediately after MPT acknowledges submit — render "
+            "completion arrives via /api/mpt-callback (A-design 2026-05-16)."
+        ),
     )
     p.add_argument("--piece-id", required=True, help="folder name under runtime/drafts/")
     p.add_argument("--voice", default=DEFAULT_VOICE, help=f"edge-tts voice id (default {DEFAULT_VOICE})")
     p.add_argument("--resolution", default=DEFAULT_RESOLUTION, help=f"WxH (default {DEFAULT_RESOLUTION})")
-    p.add_argument("--timeout", type=int, default=600, help="poll timeout in seconds")
-    p.add_argument("--dry-run", action="store_true", help="don't call MPT; print plan only")
+    p.add_argument("--dry-run", action="store_true", help="validate inputs + env; don't call MPT or write DB")
+    p.add_argument("--force", action="store_true", help="bypass in-flight idempotency check (re-submit even if pending row exists)")
     p.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"))
     return p.parse_args(argv)
 
@@ -318,20 +353,17 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s · %(message)s",
     )
-    try:
-        summary = run(
-            args.piece_id,
-            voice=args.voice,
-            resolution=args.resolution,
-            timeout_seconds=args.timeout,
-            dry_run=args.dry_run,
-        )
-    except (MPTTimeoutError, MPTTaskFailedError, MPTError):
-        return 1
-    except Exception:  # noqa: BLE001
-        logger.exception("mpt_runner top-level failure")
-        return 2
-    return 0 if summary.get("status") in ("ok", "dry_run", "skipped") else 1
+    summary = run(
+        args.piece_id,
+        voice=args.voice,
+        resolution=args.resolution,
+        dry_run=args.dry_run,
+        force=args.force,
+    )
+    status = summary.get("status")
+    if status in ("submitted", "dry_run", "skipped", "already_in_flight"):
+        return 0
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

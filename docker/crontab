@@ -49,6 +49,13 @@
 0  20 1-7 * 0   cd /app && python -m jobs.ab_aggregator
 30 20 1-7 * 0   cd /app && python -m jobs.channel_attribution
 
+# ─── MPT reconciler (every 5 minutes) ────────────────────────────────────────
+# A-design reliability backstop (2026-05-16). Catches dropped /api/mpt-callback
+# webhooks: scans mpt_tasks rows still in pending_submit/submitted >5min,
+# GETs MPT, atomically transitions on terminal state, spawns mp4 download.
+# Cheap GET-only — no work if nothing pending.
+*/5 * * * *  cd /app && python -m jobs.mpt_reconciler
+
 # ─── Health heartbeat (every 5 minutes) ──────────────────────────────────────
 # Writes a row to `heartbeat` table so Cowork dashboard knows the container is
 # alive even when no real job has fired recently.

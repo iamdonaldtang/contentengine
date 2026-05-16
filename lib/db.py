@@ -574,6 +574,195 @@ class _HeartbeatAdapter:
         return dict(row) if row else None
 
 
+class _MptTasksAdapter:
+    """mpt_tasks table — async MoneyPrinterTurbo render task state machine.
+
+    See ``lib/migrations/009_mpt_tasks.sql`` for the full state machine
+    and idempotency rationale. Summary:
+
+      pending_submit ─► submitted ─► completed (callback OR reconciler)
+                   │              ├► failed
+                   │              └► stale (>6h, reconciler-only)
+                   └► failed (submit POST errored before task_id assigned)
+
+    Idempotency: ``mark_completed`` / ``mark_failed`` / ``mark_stale`` all
+    UPDATE ... WHERE status='submitted'. Boolean return = "did THIS call
+    win the transition?" — the winner triggers downstream work, losers
+    no-op. Used to make callback retries and callback/reconciler races
+    safe without explicit locks.
+    """
+
+    _VALID_SOURCES = frozenset({"callback", "reconciler"})
+
+    def __init__(self, parent: "Database") -> None:
+        self._db = parent
+
+    # -- writes -------------------------------------------------------------- #
+
+    def create_pending(self, piece_id: str) -> int:
+        """Insert a pending_submit row. Called by mpt_runner BEFORE the MPT
+        API call so reconciler can find the row even if submit hangs / crashes.
+        """
+        cur = self._db.execute(
+            "INSERT INTO mpt_tasks (piece_id, status) VALUES (?, 'pending_submit')",
+            (piece_id,),
+        )
+        return int(cur.lastrowid or 0)
+
+    def mark_submitted(self, row_id: int, task_id: str) -> bool:
+        """pending_submit → submitted. Stamps task_id + submitted_at.
+
+        Returns True if the row was transitioned, False if the row was
+        already past pending_submit (defensive: shouldn't happen but
+        guards against double-call bugs in mpt_runner).
+        """
+        cur = self._db.execute(
+            "UPDATE mpt_tasks SET "
+            "    task_id=?, status='submitted', "
+            "    submitted_at=CURRENT_TIMESTAMP, "
+            "    updated_at=CURRENT_TIMESTAMP, "
+            "    submit_attempt=submit_attempt+1 "
+            "WHERE id=? AND status='pending_submit'",
+            (task_id, row_id),
+        )
+        return cur.rowcount > 0
+
+    def mark_submit_failed(self, row_id: int, error: str) -> bool:
+        """pending_submit → failed (MPT submit POST errored, no task_id assigned)."""
+        cur = self._db.execute(
+            "UPDATE mpt_tasks SET "
+            "    status='failed', error=?, "
+            "    completed_at=CURRENT_TIMESTAMP, "
+            "    updated_at=CURRENT_TIMESTAMP, "
+            "    submit_attempt=submit_attempt+1 "
+            "WHERE id=? AND status='pending_submit'",
+            (error, row_id),
+        )
+        return cur.rowcount > 0
+
+    def mark_completed(self, task_id: str, mp4_url: str, *, source: str = "callback") -> bool:
+        """submitted → completed. Idempotent (UPDATE ... WHERE status='submitted').
+
+        ``source`` must be 'callback' or 'reconciler' — recorded in
+        ``terminal_source`` for audit. callback_received_at is set only
+        for source='callback' (a reconciler-won race means no real
+        callback was received, just our backfill).
+
+        Returns True if THIS call won the transition (caller should
+        spawn the download + downstream pipeline); False if the row
+        was already terminal (caller no-ops).
+        """
+        if source not in self._VALID_SOURCES:
+            raise ValueError(f"source must be one of {sorted(self._VALID_SOURCES)}, got {source!r}")
+        callback_ts_expr = "CURRENT_TIMESTAMP" if source == "callback" else "callback_received_at"
+        cur = self._db.execute(
+            "UPDATE mpt_tasks SET "
+            "    status='completed', mp4_url=?, "
+            "    terminal_source=?, "
+            f"    callback_received_at={callback_ts_expr}, "
+            "    completed_at=CURRENT_TIMESTAMP, "
+            "    updated_at=CURRENT_TIMESTAMP "
+            "WHERE task_id=? AND status='submitted'",
+            (mp4_url, source, task_id),
+        )
+        return cur.rowcount > 0
+
+    def mark_failed(self, task_id: str, error: str, *, source: str = "callback") -> bool:
+        """submitted → failed. Idempotent. Same return semantics as mark_completed."""
+        if source not in self._VALID_SOURCES:
+            raise ValueError(f"source must be one of {sorted(self._VALID_SOURCES)}, got {source!r}")
+        callback_ts_expr = "CURRENT_TIMESTAMP" if source == "callback" else "callback_received_at"
+        cur = self._db.execute(
+            "UPDATE mpt_tasks SET "
+            "    status='failed', error=?, "
+            "    terminal_source=?, "
+            f"    callback_received_at={callback_ts_expr}, "
+            "    completed_at=CURRENT_TIMESTAMP, "
+            "    updated_at=CURRENT_TIMESTAMP "
+            "WHERE task_id=? AND status='submitted'",
+            (error, source, task_id),
+        )
+        return cur.rowcount > 0
+
+    def mark_stale(self, task_id: str, error: str = "stuck > 6h, no terminal state") -> bool:
+        """submitted → stale. Reconciler-only (no callback equivalent).
+        Idempotent.
+        """
+        cur = self._db.execute(
+            "UPDATE mpt_tasks SET "
+            "    status='stale', error=?, "
+            "    terminal_source='reconciler', "
+            "    completed_at=CURRENT_TIMESTAMP, "
+            "    updated_at=CURRENT_TIMESTAMP "
+            "WHERE task_id=? AND status='submitted'",
+            (error, task_id),
+        )
+        return cur.rowcount > 0
+
+    def set_media_path(self, task_id: str, media_path: str) -> None:
+        """Stamp media_path after the mp4 download daemon thread finishes.
+
+        Unconditional update — file already on disk, idempotent at the
+        filesystem level (same task → same path), so we don't gate by
+        status here.
+        """
+        self._db.execute(
+            "UPDATE mpt_tasks SET media_path=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE task_id=?",
+            (media_path, task_id),
+        )
+
+    # -- reads --------------------------------------------------------------- #
+
+    def get_by_task_id(self, task_id: str) -> sqlite3.Row | None:
+        """Lookup by MPT-assigned task_id. Used by callback handler + reconciler."""
+        return self._db.fetchone("SELECT * FROM mpt_tasks WHERE task_id=?", (task_id,))
+
+    def get_by_id(self, row_id: int) -> sqlite3.Row | None:
+        """Lookup by internal rowid. Used by mpt_runner to confirm state post-submit."""
+        return self._db.fetchone("SELECT * FROM mpt_tasks WHERE id=?", (row_id,))
+
+    def get_in_flight_for_piece(self, piece_id: str) -> sqlite3.Row | None:
+        """Return the most recent non-terminal row for a piece, or None.
+
+        Used by mpt_runner to make the cron idempotent: if a previous tick
+        already submitted a task that's still rendering (pending_submit /
+        submitted), return that row instead of starting a duplicate render.
+        """
+        return self._db.fetchone(
+            "SELECT * FROM mpt_tasks "
+            "WHERE piece_id=? AND status IN ('pending_submit', 'submitted') "
+            "ORDER BY id DESC LIMIT 1",
+            (piece_id,),
+        )
+
+    def get_pending_for_reconcile(
+        self,
+        *,
+        older_than_seconds: int = 300,
+        limit: int = 50,
+    ) -> list[sqlite3.Row]:
+        """Rows still in 'submitted' or 'pending_submit', last touched
+        > ``older_than_seconds`` ago. Reconciler cron scans this.
+
+        The age guard uses COALESCE(submitted_at, created_at) so
+        pending_submit rows (no submitted_at yet) age against created_at —
+        this catches the "mpt_runner crashed between INSERT and UPDATE"
+        case after the same threshold.
+        """
+        if older_than_seconds < 0:
+            raise ValueError(f"older_than_seconds must be >= 0, got {older_than_seconds}")
+        if limit <= 0:
+            raise ValueError(f"limit must be > 0, got {limit}")
+        return self._db.fetchall(
+            "SELECT * FROM mpt_tasks "
+            "WHERE status IN ('submitted', 'pending_submit') "
+            "  AND COALESCE(submitted_at, created_at) < datetime('now', ?) "
+            "ORDER BY id LIMIT ?",
+            (f"-{int(older_than_seconds)} seconds", int(limit)),
+        )
+
+
 class _GenericTableAdapter:
     """Lightweight generic adapter for tables that only need ``insert`` /
     ``insert_many`` / ``fetchall``. Used for the long-tail tables that don't
@@ -652,6 +841,7 @@ class Database:
         self.publish_failures = _GenericTableAdapter(self, "publish_failures")
         self.kol_watchlist = _GenericTableAdapter(self, "kol_watchlist")
         self.candidates = _GenericTableAdapter(self, "candidates")
+        self.mpt_tasks = _MptTasksAdapter(self)
 
         # DDL is bootstrapped on first connect; force it now so callers fail
         # fast if the DB is unreachable.

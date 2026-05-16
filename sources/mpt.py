@@ -38,6 +38,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -82,6 +83,16 @@ DEFAULT_TIMEOUT = 30  # per-HTTP-call
 #  -1 = failed (error in pipeline)
 # Anything else => still running.
 _MPT_TERMINAL_STATES: set[int] = {1, -1}
+
+
+def _safe_host(url: str) -> str:
+    """Return ``scheme://host:port`` from a URL, stripping path / query / fragment.
+
+    Used for logging callback URLs without leaking any secret that callers
+    might accidentally put in a query string (e.g. ``?token=...``).
+    """
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else "<unparseable>"
 
 
 def _aspect_from_resolution(resolution: str) -> str:
@@ -178,6 +189,8 @@ class MPTClient:
         clip_duration: int = 5,
         video_count: int = 1,
         extra_params: dict[str, Any] | None = None,
+        callback_url: str | None = None,
+        callback_secret: str | None = None,
     ) -> str:
         """Create a new MPT task.
 
@@ -195,18 +208,42 @@ class MPTClient:
                 requests 1 — caller can override for A/B variants.
             extra_params: Forwarded into the MPT body verbatim (override or
                 add knobs MPT supports — voice_volume, bgm_type, ...).
+            callback_url: Async callback (A-design 2026-05-16). When set
+                together with ``callback_secret``, MPT will POST to this URL
+                on task completion (or failure) with an HMAC-SHA256 signed
+                body, eliminating engine-side polling. Opt-in: when both
+                are ``None`` the sync poll model is preserved.
+            callback_secret: Shared secret for the HMAC-SHA256 signature MPT
+                attaches to the callback POST. Engine verifies via the same
+                secret. Must be paired with ``callback_url`` (XOR rejected).
 
         Returns:
             The MPT task_id (string).
 
         Raises:
             MPTConfigError: ``MPT_API_BASE`` missing.
-            MPTError: Submission failed after retries.
+            MPTError: Submission failed, or callback args are
+                inconsistent (only one of url/secret given, or url has
+                non-http(s) scheme).
         """
         if not self.base_url:
             raise MPTConfigError("MPT_API_BASE not set")
         if not script or not isinstance(script, str):
             raise MPTError(f"submit_video: script must be non-empty string; got {script!r}")
+
+        # XOR check: callback is opt-in but both fields must travel together.
+        # Sending callback_url without secret would let MPT POST unauthenticated
+        # to engine; sending secret without url is just nonsense.
+        if bool(callback_url) ^ bool(callback_secret):
+            raise MPTError(
+                "submit_video: callback_url and callback_secret must both be set "
+                "or both be None (XOR rejected to avoid unauthenticated callbacks)"
+            )
+        if callback_url and not callback_url.startswith(("http://", "https://")):
+            raise MPTError(
+                f"submit_video: callback_url must start with http:// or https://, "
+                f"got: {callback_url[:60]!r}"
+            )
 
         subj = subject or script.strip().splitlines()[0][:80]
         body: dict[str, Any] = {
@@ -219,6 +256,9 @@ class MPTClient:
         }
         if extra_params:
             body.update(extra_params)
+        if callback_url and callback_secret:
+            body["callback_url"] = callback_url
+            body["callback_secret"] = callback_secret
 
         raw = self._post("/api/v1/videos", body)
         data = self._unwrap(raw) or {}
@@ -227,8 +267,39 @@ class MPTClient:
         task_id = data.get("task_id") or data.get("taskId") or data.get("id")
         if not task_id:
             raise MPTError(f"submit_video: response missing task_id: {raw!r:.200}")
-        logger.info("MPT submit ok task_id=%s voice=%s aspect=%s", task_id, voice, body["video_aspect"])
+        # NEVER log callback_secret — only the host of the URL for ops debugging.
+        if callback_url:
+            logger.info(
+                "MPT submit ok (callback mode) task_id=%s voice=%s aspect=%s callback_host=%s",
+                task_id, voice, body["video_aspect"], _safe_host(callback_url),
+            )
+        else:
+            logger.info("MPT submit ok task_id=%s voice=%s aspect=%s", task_id, voice, body["video_aspect"])
         return str(task_id)
+
+    def get_task(self, task_id: str) -> dict[str, Any]:
+        """Single non-blocking GET of an MPT task — never polls, never sleeps.
+
+        Used by ``jobs.mpt_reconciler`` to check whether a task has reached
+        a terminal state since the engine last looked. Distinct from
+        :meth:`poll_task` which loops for minutes.
+
+        Returns the unwrapped task dict (``state``, ``progress``, ``videos``
+        etc.).
+
+        Raises:
+            MPTError: HTTP failure after retries.
+            MPTConfigError: ``MPT_API_BASE`` not set.
+        """
+        if not task_id:
+            raise MPTError("get_task: task_id must be non-empty")
+        if not self.base_url:
+            raise MPTConfigError("MPT_API_BASE not set")
+        raw = self._get(f"/api/v1/tasks/{task_id}")
+        data = self._unwrap(raw) or {}
+        if not isinstance(data, dict):
+            raise MPTError(f"get_task: unexpected response shape: {type(data).__name__}")
+        return data
 
     def poll_task(
         self,
