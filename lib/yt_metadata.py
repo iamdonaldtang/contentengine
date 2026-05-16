@@ -169,6 +169,17 @@ def _validate(raw: dict[str, Any]) -> None:
                 f"banned phrase {phrase!r} appears in title or description"
             )
 
+    # Soft check (warn-only) — description SHOULD embed the
+    # {{CTA_URL}} placeholder so schedule_planner can inject the per-account
+    # UTM URL at publish time. If absent, schedule_planner.inject_cta falls
+    # back to appending the URL on its own line; that's correct but suboptimal
+    # for tone. Warn so the author / Cowork operator notices.
+    if "{{CTA_URL}}" not in description:
+        logger.warning(
+            "yt_metadata: description has no {{CTA_URL}} placeholder — "
+            "schedule_planner will append URL on its own line as fallback"
+        )
+
 
 def _coerce(raw: dict[str, Any], default_privacy: str, source: str) -> YouTubeMetadata:
     """Apply defaults + cast types. Assumes raw already passed _validate."""
@@ -245,28 +256,13 @@ def _read_script(piece_dir: Path) -> str:
 
 
 def _read_utm_link(piece_dir: Path, platform_key: str = "youtube") -> str:
-    """Pull the matching utm short/long URL for YouTube from utm_links.json."""
-    path = piece_dir / "utm_links.json"
-    if not path.is_file():
-        return ""
-    try:
-        with path.open("r", encoding="utf-8") as fp:
-            data = json.load(fp)
-    except (json.JSONDecodeError, OSError):
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    blob = data.get(platform_key)
-    if isinstance(blob, dict):
-        # Common shapes: {"short_url": "...", "long_url": "..."} OR
-        #                {"<account>": {"short_url": "...", ...}}
-        if blob.get("short_url"):
-            return str(blob["short_url"])
-        if blob.get("long_url"):
-            return str(blob["long_url"])
-        for sub in blob.values():
-            if isinstance(sub, dict) and (sub.get("short_url") or sub.get("long_url")):
-                return str(sub.get("short_url") or sub["long_url"])
+    """Deprecated since 2026-05-16. The LLM no longer receives URLs — it
+    writes ``{{CTA_URL}}`` placeholders and schedule_planner injects the
+    per-(platform, account) URL at publish time. Kept as a stub returning
+    "" so any callers we missed don't crash.
+    """
+    _ = piece_dir, platform_key  # mark args as used for linters
+    return ""
     return ""
 
 
@@ -282,7 +278,6 @@ def _try_derive_via_llm(
         return None
     selection_card = _read_selection_card(piece_dir)
     script = _read_script(piece_dir)
-    utm_link = _read_utm_link(piece_dir, "youtube")
 
     if not script:
         # Without the script there's nothing meaningful to derive from.
@@ -290,11 +285,15 @@ def _try_derive_via_llm(
         logger.warning("yt_metadata: no shorts_60s.md for %s; skipping LLM derivation", piece_id)
         return None
 
+    # NOTE: utm_link removed from payload as of 2026-05-16. The LLM no longer
+    # sees the URL; it writes `{{CTA_URL}}` placeholder per the prompt and
+    # schedule_planner injects the per-account URL at publish time. Keeps
+    # yt_metadata stateless w.r.t. UTM and avoids the LLM dropping/mangling
+    # the URL (verified piece 02 → LLM ignored utm_link, wrote bare taskon.xyz).
     user_payload = {
         "piece_id": piece_id,
         "selection_card": selection_card,
         "script": script[:3000],  # cap to keep prompt token-bounded
-        "utm_link": utm_link,
         "channel_name": channel_name,
     }
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -354,7 +353,6 @@ def _hard_template_fallback(
     """
     selection_card = _read_selection_card(piece_dir)
     script = _read_script(piece_dir)
-    utm_link = _read_utm_link(piece_dir, "youtube")
 
     # Title
     first_line = next((ln.strip() for ln in script.splitlines() if ln.strip()), "")
@@ -369,13 +367,16 @@ def _hard_template_fallback(
         first_line = first_line[: max_first - 1].rstrip() + "…"
     title = (first_line + suffix).strip()
 
-    # Description
+    # Description — use {{CTA_URL}} placeholder per A-design 2026-05-16.
+    # schedule_planner will substitute the per-account URL at publish time
+    # (lib.content_inject.inject_cta). Hard fallback keeps the placeholder so
+    # the same downstream path applies whether the description came from LLM,
+    # Cowork yaml, or this fallback.
     desc_parts: list[str] = []
     if script:
         desc_parts.append(script[: DESCRIPTION_MAX - 500])  # leave room for footer
-    if utm_link:
-        desc_parts.append("")
-        desc_parts.append(f"🔗 {utm_link}")
+    desc_parts.append("")
+    desc_parts.append("评论里告诉我你的看法 -> {{CTA_URL}}")
     desc_parts.append("")
     desc_parts.append("TaskOn · Web3 Growth Platform")
     desc_parts.append("Subscribe for honest takes on Quest, Sybil, and growth.")

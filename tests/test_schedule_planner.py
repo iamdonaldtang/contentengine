@@ -291,3 +291,193 @@ def test_schedule_planner_writes_publishings_on_create_post(
     )
     assert events, "state_events should have schedule_planner rows"
     assert all(e["to_state"] == "scheduled" for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# Test 5 — CTA URL placeholder injection (2026-05-16 attribution fix)
+# --------------------------------------------------------------------------- #
+
+
+def test_schedule_planner_injects_cta_url_from_placeholder(
+    tmp_db: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """schedule_planner replaces ``{{CTA_URL}}`` in content + yt description with
+    the per-(platform, account) URL from utm_links.json — production-shape
+    ``{network}_{account}: {long_url, short_url, utm_query}``."""
+    monkeypatch.setenv("DRAFTS_DIR", str(tmp_path / "drafts"))
+    planner = _reload_planner()
+    _fill_integration_ids(planner, monkeypatch)
+    # Force account map + cta_kind via config patch.
+    real_load = planner._load_config
+
+    def _patched_load() -> dict[str, Any]:
+        cfg = real_load()
+        postiz = cfg.setdefault("postiz", {})
+        postiz["accounts"] = {
+            "x_thread": "donald_en", "x_short": "donald_en",
+            "linkedin_post": "donald_en", "linkedin_carousel": "donald_en",
+            "medium_long": "donald_en", "yt_shorts": "donald_en",
+            "yt_long": "donald_en", "tiktok": "donald_en",
+        }
+        postiz["cta_url_kind"] = "long_url"
+        return cfg
+    monkeypatch.setattr(planner, "_load_config", _patched_load)
+
+    drafts = tmp_path / "drafts"
+    piece_dir = drafts / "cta-piece"
+    piece_dir.mkdir(parents=True, exist_ok=True)
+    # Each platform draft has the placeholder.
+    (piece_dir / "xthread_final.md").write_text(
+        "Hook tweet 1\n\nTweet 2\n\nFinal CTA -> {{CTA_URL}}", encoding="utf-8"
+    )
+    (piece_dir / "linkedin_post.md").write_text(
+        "LinkedIn body... 评论告诉我 -> {{CTA_URL}}", encoding="utf-8"
+    )
+    (piece_dir / "carousel_10pages.md").write_text(
+        "Page 1\nPage 10 CTA {{CTA_URL}}", encoding="utf-8"
+    )
+    (piece_dir / "medium_long.md").write_text(
+        "# Long-form\n\nBody...\n\nGet diagnostic -> {{CTA_URL}}", encoding="utf-8"
+    )
+    (piece_dir / "shorts_60s.md").write_text("script narration", encoding="utf-8")
+    (piece_dir / "shorts_60s.mp4").write_bytes(b"\x00")
+    (piece_dir / "selection_card.yaml").write_text(
+        "piece_id: cta-piece\nhook_type: 47pct_bot\n", encoding="utf-8"
+    )
+    # Production-shape utm_links.json: keys are {network}_{account}.
+    utm = {}
+    for network in ("twitter", "linkedin", "youtube", "tiktok", "medium"):
+        utm[f"{network}_donald_en"] = {
+            "long_url": f"https://taskon.xyz/free-diagnostic?utm_source={network}&utm_campaign=cta-piece&utm_content=donald_en",
+            "short_url": f"http://l.taskon.xyz/cta-piece-{network}-1",
+            "utm_query": f"?utm_source={network}&utm_campaign=cta-piece&utm_content=donald_en",
+        }
+    (piece_dir / "utm_links.json").write_text(json.dumps(utm), encoding="utf-8")
+
+    tmp_db.pieces.create("cta-piece", '{"piece_id":"cta-piece"}', actor="test")
+    tmp_db.pieces.update_state("cta-piece", "reviewed", actor="test")
+
+    # Capture Postiz calls; integration_ids vary (some are real config UUIDs,
+    # others are int-<k>-uuid for unset platforms), so we identify each call
+    # by the unique content prefix written above.
+    captured: list[dict[str, Any]] = []
+
+    def _capture(**kw: Any) -> dict[str, Any]:
+        captured.append(kw)
+        return {"posts": [{"id": "stub-post-id"}]}
+    monkeypatch.setattr(planner.postiz, "create_post", _capture)
+
+    # Stub yt_metadata so we control description shape (with placeholder).
+    fake_yt_meta = type("M", (), {
+        "source": "test",
+        "title": "test title",
+        "description": "Hook line\n\nCTA -> {{CTA_URL}}",
+        "to_postiz_settings": lambda self: {
+            "title": "test title",
+            "description": "Hook line\n\nCTA -> {{CTA_URL}}",
+            "type": "public",
+            "tags": [{"value": "t", "label": "t"}],
+            "category": 22,
+            "notMadeForKids": True,
+        },
+    })()
+    monkeypatch.setattr(planner, "load_or_derive", lambda *_a, **_kw: fake_yt_meta)
+
+    summary = planner.run("cta-piece", base_monday=dt.date(2026, 5, 18))
+    assert summary["scheduled"] >= 6, summary
+
+    def _find_by_content_prefix(prefix: str) -> dict[str, Any]:
+        for c in captured:
+            if (c.get("content") or "").startswith(prefix):
+                return c
+        raise AssertionError(f"no Postiz call with content starting with {prefix!r}")
+
+    # LinkedIn content: placeholder replaced with linkedin_donald_en long_url.
+    li_call = _find_by_content_prefix("LinkedIn body")
+    assert "{{CTA_URL}}" not in li_call["content"]
+    assert "utm_source=linkedin" in li_call["content"]
+    assert "utm_content=donald_en" in li_call["content"]
+
+    # YouTube extra_settings.description: placeholder replaced with youtube URL.
+    yt_call = next(
+        c for c in captured
+        if (c.get("extra_settings") or {}).get("title") == "test title"
+    )
+    yt_desc = (yt_call.get("extra_settings") or {}).get("description", "")
+    assert "{{CTA_URL}}" not in yt_desc
+    assert "utm_source=youtube" in yt_desc
+
+    # Cross-platform: each platform got its OWN network URL (no leakage).
+    medium_call = _find_by_content_prefix("# Long-form")
+    assert "utm_source=medium" in medium_call["content"]
+    assert "utm_source=youtube" not in medium_call["content"]
+
+
+def test_schedule_planner_cta_fallback_appends_when_no_placeholder(
+    tmp_db: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy markdown without placeholder gets the URL appended (warn-only)."""
+    monkeypatch.setenv("DRAFTS_DIR", str(tmp_path / "drafts"))
+    planner = _reload_planner()
+    _fill_integration_ids(planner, monkeypatch)
+
+    real_load = planner._load_config
+
+    def _patched_load() -> dict[str, Any]:
+        cfg = real_load()
+        cfg.setdefault("postiz", {})["accounts"] = {"linkedin_post": "donald_en"}
+        return cfg
+    monkeypatch.setattr(planner, "_load_config", _patched_load)
+
+    drafts = tmp_path / "drafts"
+    piece_dir = drafts / "legacy-piece"
+    piece_dir.mkdir(parents=True, exist_ok=True)
+    (piece_dir / "linkedin_post.md").write_text(
+        "Legacy content without any placeholder.", encoding="utf-8"
+    )
+    # Minimum required other files (build_schedule iterates all platforms).
+    for f in ("xthread_final.md", "carousel_10pages.md", "medium_long.md", "shorts_60s.md"):
+        (piece_dir / f).write_text("stub", encoding="utf-8")
+    (piece_dir / "shorts_60s.mp4").write_bytes(b"\x00")
+    (piece_dir / "selection_card.yaml").write_text(
+        "piece_id: legacy-piece\n", encoding="utf-8"
+    )
+    (piece_dir / "utm_links.json").write_text(json.dumps({
+        "linkedin_donald_en": {
+            "long_url": "https://taskon.xyz/x?utm_source=linkedin&utm_campaign=legacy",
+            "short_url": "http://l.t/x",
+            "utm_query": "?utm_source=linkedin",
+        }
+    }), encoding="utf-8")
+
+    tmp_db.pieces.create("legacy-piece", '{"piece_id":"legacy-piece"}', actor="test")
+    tmp_db.pieces.update_state("legacy-piece", "reviewed", actor="test")
+
+    captured: list[dict[str, Any]] = []
+
+    def _capture(**kw: Any) -> dict[str, Any]:
+        captured.append(kw)
+        return {"posts": [{"id": "x"}]}
+    monkeypatch.setattr(planner.postiz, "create_post", _capture)
+    # Don't need yt_metadata for this test path; stub to avoid LLM calls.
+    monkeypatch.setattr(planner, "load_or_derive", lambda *_a, **_kw: type("M", (), {
+        "source": "test",
+        "title": "t",
+        "description": "d",
+        "to_postiz_settings": lambda self: {"title": "t", "description": "d"},
+    })())
+
+    planner.run("legacy-piece", base_monday=dt.date(2026, 5, 18))
+    # Find the linkedin_post call by its unique content prefix (other platforms
+    # use stub content).
+    li_calls = [c for c in captured if (c.get("content") or "").startswith("Legacy content")]
+    assert li_calls, f"linkedin post should have fired; got {len(captured)} calls"
+    content = li_calls[0]["content"]
+    # Fallback appends URL on its own block at the end.
+    assert content.startswith("Legacy content without any placeholder.")
+    assert "utm_source=linkedin" in content
+    assert "utm_campaign=legacy" in content

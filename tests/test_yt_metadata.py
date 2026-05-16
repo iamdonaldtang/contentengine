@@ -184,7 +184,10 @@ def test_llm_failure_engages_hard_fallback_and_alerts(
     assert "47%" in meta.title or "Quest" in meta.title or "Bot" in meta.title
     assert meta.title.endswith("| TaskOn")
     assert len(meta.title) <= yt_module.TITLE_MAX
-    assert "https://l.taskon.xyz/q1-bench-yt" in meta.description
+    # Hard fallback now embeds the {{CTA_URL}} placeholder (2026-05-16);
+    # schedule_planner replaces it with the per-account UTM URL at publish
+    # time. The literal short URL is no longer baked in by yt_metadata.
+    assert "{{CTA_URL}}" in meta.description
     # Fallback tags derived from selection_card.
     assert "47pct-bot" in meta.tags or "trust-collapse" in meta.tags
     assert "taskon" in meta.tags

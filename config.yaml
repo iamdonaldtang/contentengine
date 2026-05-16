@@ -43,6 +43,36 @@ postiz:
     tiktok: ""                                   # TikTok — pending Developer approval
     x_short: ""                                  # = x_thread when connected
 
+  # ----------------------------------------------------------------------- #
+  # CTA URL account selection · platform → utm_links.json account suffix
+  # ----------------------------------------------------------------------- #
+  # utm_generator writes utm_links.json with keys like ``youtube_donald_en`` /
+  # ``linkedin_taskon_official``. schedule_planner picks ONE account per
+  # platform to inject the URL into post content. Currently all platforms
+  # default to ``donald_en`` (the personal-voice account). Switch a platform's
+  # account by changing the value here — no code change.
+  #
+  # 2026-05-16: ``taskon_official`` deferred until LinkedIn/YT brand-account
+  # voice strategy is decided.
+  accounts:
+    x_thread: donald_en
+    x_short: donald_en
+    linkedin_post: donald_en
+    linkedin_carousel: donald_en
+    medium_long: donald_en
+    yt_shorts: donald_en
+    yt_long: donald_en
+    tiktok: donald_en
+
+  # ----------------------------------------------------------------------- #
+  # CTA URL choice · long_url vs short_url from utm_links.json
+  # ----------------------------------------------------------------------- #
+  # H.1 decision 2026-05-16: ``long_url`` (l.taskon.xyz tunnel not yet
+  # configured — short_url would 404 publicly). GA4 attribution is identical
+  # either way since the long URL embeds the full utm_query. Switch to
+  # ``short_url`` after configuring l.taskon.xyz cloudflared route.
+  cta_url_kind: long_url
+
 schedule_planner:
   # All offsets are computed from the cron's fire time → next Monday 09:00 ET
   # anchor → each platform's slot. ET = America/New_York (DST-aware).

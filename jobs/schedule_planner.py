@@ -55,11 +55,68 @@ load_dotenv(override=False)
 # Make `python jobs/schedule_planner.py` work as well as `-m jobs.schedule_planner`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.content_inject import inject_cta  # noqa: E402
 from lib.db import db  # noqa: E402
 from lib.lark import alert  # noqa: E402
 from lib.media_url import MediaUrlConfigError, sign_media_url  # noqa: E402
 from lib.yt_metadata import YouTubeMetadata, load_or_derive  # noqa: E402
 from sources.postiz import PostizError, postiz  # noqa: E402
+
+
+# Platform → network mapping used to look up CTA URL in utm_links.json
+# (whose keys are ``<network>_<account>``). Kept separate from the
+# alias_map in _pick_utm_for_platform because that one services the
+# fallback "did the utm_links generator use platform key or network key"
+# question; this one is the canonical platform→network bridge.
+_PLATFORM_TO_NETWORK = {
+    "x_thread": "twitter",
+    "x_short": "twitter",
+    "linkedin_post": "linkedin",
+    "linkedin_carousel": "linkedin",
+    "medium_long": "medium",
+    "yt_shorts": "youtube",
+    "yt_long": "youtube",
+    "tiktok": "tiktok",
+}
+
+
+def _pick_cta_url(
+    utm_links: dict[str, Any],
+    platform_key: str,
+    account: str,
+    *,
+    kind: str = "long_url",
+) -> str | None:
+    """Look up the CTA URL for ``(platform, account)`` from utm_links.json.
+
+    Args:
+        utm_links: Parsed ``utm_links.json`` contents (caller-loaded).
+        platform_key: e.g. ``"yt_shorts"``; mapped to network via
+            :data:`_PLATFORM_TO_NETWORK`.
+        account: e.g. ``"donald_en"`` — second segment of the utm_links
+            key (``{network}_{account}``).
+        kind: Which URL flavour to return — ``"long_url"`` (full URL with
+            UTM query) or ``"short_url"`` (l.taskon.xyz shlink). Per
+            config.yaml ``postiz.cta_url_kind``.
+
+    Returns:
+        URL string or ``None`` if the platform/account combination is
+        missing or malformed.
+    """
+    if kind not in ("long_url", "short_url"):
+        logger.warning("_pick_cta_url: unknown kind=%r (using long_url)", kind)
+        kind = "long_url"
+    network = _PLATFORM_TO_NETWORK.get(platform_key)
+    if not network:
+        logger.warning("_pick_cta_url: no network mapping for platform=%s", platform_key)
+        return None
+    blob = utm_links.get(f"{network}_{account}")
+    if not isinstance(blob, dict):
+        return None
+    url = blob.get(kind)
+    if not isinstance(url, str) or not url:
+        return None
+    return url
 
 
 # Platforms that require an mp4 attachment for Postiz publishing. The mp4 lives
@@ -454,6 +511,13 @@ def run(
     failures = 0
     results: list[dict[str, Any]] = []
 
+    # Cache UTM + account/CTA-kind config once for all plans below.
+    piece_dir = _drafts_dir() / piece_id
+    utm_links = _load_utm_links(piece_dir) or {}
+    postiz_cfg = cfg.get("postiz") or {}
+    accounts_map: dict[str, str] = postiz_cfg.get("accounts") or {}
+    cta_kind: str = postiz_cfg.get("cta_url_kind") or "long_url"
+
     for plan in plans:
         plat = plan["platform"]
         if plan.get("skip_reason"):
@@ -527,13 +591,55 @@ def run(
                     logger.exception("alert() emission failed")
                 continue
 
+        # ───── CTA URL injection ─────────────────────────────────────────── #
+        # Replace ``{{CTA_URL}}`` placeholder in the platform content (+ the
+        # LLM-derived YouTube description) with the long/short URL bound to
+        # this (platform, account) pair. Falls back to appending the URL when
+        # no placeholder is present (legacy markdown without SOP) — emits a
+        # WARN so the author notices for next piece. 2026-05-16 introduction.
+        cta_account = accounts_map.get(plat, "donald_en")
+        cta_url = _pick_cta_url(utm_links, plat, cta_account, kind=cta_kind)
+        cta_label = "no_cta_url"
+        if cta_url:
+            try:
+                plan["content"] = inject_cta(plan["content"], cta_url, strict=False)
+                if extra_settings.get("description"):
+                    extra_settings["description"] = inject_cta(
+                        extra_settings["description"], cta_url, strict=False,
+                    )
+                cta_label = f"cta_kind={cta_kind} account={cta_account}"
+            except Exception as exc:  # noqa: BLE001 — never block on this
+                logger.exception(
+                    "inject_cta failed for piece=%s platform=%s: %s",
+                    piece_id, plat, exc,
+                )
+                cta_label = f"cta=ERR ({type(exc).__name__})"
+        else:
+            # Missing CTA URL is a soft failure — the post will go live but
+            # without attribution. Loud P2 so the operator notices.
+            logger.warning(
+                "no CTA URL for piece=%s platform=%s account=%s — post will "
+                "publish without attribution link",
+                piece_id, plat, cta_account,
+            )
+            try:
+                alert(
+                    "P2",
+                    f"schedule_planner: missing CTA URL for {piece_id}/{plat}",
+                    {"account": cta_account, "kind": cta_kind},
+                )
+            except Exception:
+                logger.exception("alert() emission failed")
+
         if dry_run:
             logger.info(
-                "DRY-RUN · piece=%s platform=%s scheduled_at=%s utm_campaign=%s integration=%s %s",
+                "DRY-RUN · piece=%s platform=%s scheduled_at=%s utm_campaign=%s "
+                "integration=%s cta=%s %s",
                 piece_id, plat,
                 plan["scheduled_at"].isoformat(),
                 plan["utm_campaign"],
                 (plan["integration_id"][:8] + "...") if plan["integration_id"] else "(empty)",
+                cta_label,
                 yt_meta_label or "",
             )
             entry: dict[str, Any] = {
@@ -541,6 +647,7 @@ def run(
                 "status": "dry_run",
                 "scheduled_at": plan["scheduled_at"].isoformat(),
                 "utm_campaign": plan["utm_campaign"],
+                "cta": cta_label,
             }
             if yt_meta_label:
                 entry["yt_meta"] = yt_meta_label
