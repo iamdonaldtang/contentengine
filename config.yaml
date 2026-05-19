@@ -73,6 +73,47 @@ postiz:
   # ``short_url`` after configuring l.taskon.xyz cloudflared route.
   cta_url_kind: long_url
 
+  # ----------------------------------------------------------------------- #
+  # Matrix-account cross-post routing (B3 §5.2, ship 2026-05-18 · T-08)
+  # ----------------------------------------------------------------------- #
+  # For each platform, the schedule_planner first publishes to the primary
+  # account (per ``accounts`` map above) and then, optionally, replays the
+  # same content to additional accounts after ``offset_minutes`` delay.
+  # Each cross_post entry must specify:
+  #   * account         — utm_links account suffix (drives utm_content)
+  #   * integration_id  — Postiz integration UUID for that account's channel
+  #   * offset_minutes  — delay from primary scheduled_at (positive int)
+  #
+  # Default: all cross_post lists are empty → identical pre-T-08 behaviour.
+  # Donald populates entries only when the secondary account's Postiz
+  # integration has been connected.
+  #
+  # NEVER add an entry under ``x_thread`` or ``x_short`` — B3 §2 杠杆 1
+  # explicit prohibition: 27-人 协调 Quote 被 X 算法识别为机构托,降权.
+  # Cross-post for X is left to the human 5-人 Reply 队伍 (B3 §5.3).
+  routing:
+    yt_shorts:
+      cross_post: []
+      # Example once a 2nd YT channel is connected in Postiz:
+      # cross_post:
+      #   - account: taskon_official
+      #     integration_id: "<UUID-of-taskon-official-yt>"
+      #     offset_minutes: 240    # +4h after primary (donald_en) publishes
+    yt_long:
+      cross_post: []
+    linkedin_post:
+      cross_post: []
+    linkedin_carousel:
+      cross_post: []
+    medium_long:
+      cross_post: []
+    tiktok:
+      cross_post: []
+    x_thread:
+      cross_post: []   # ★ DO NOT POPULATE — see comment above
+    x_short:
+      cross_post: []   # ★ DO NOT POPULATE — see comment above
+
 schedule_planner:
   # All offsets are computed from the cron's fire time → next Monday 09:00 ET
   # anchor → each platform's slot. ET = America/New_York (DST-aware).
@@ -184,12 +225,14 @@ scheduler:
     - name: monthly_reporter
       cron: "0 19 28-31 * *"      # last days of month, check inside script
       script: jobs.monthly_reporter
-    - name: kol_watch
-      cron: "0 10 * * 0"          # Sunday 10:00
-      script: jobs.kol_watch
-    - name: update_btouch
-      cron: "0 9 * * 1"           # Monday 09:00
-      script: jobs.update_btouch
+    # disabled 2026-05-18: 暂停 KOL 监控（旁支模块）
+    # - name: kol_watch
+    #   cron: "0 10 * * 0"          # Sunday 10:00
+    #   script: jobs.kol_watch
+    # disabled 2026-05-18: 暂停 btouch 回写（旁支模块）
+    # - name: update_btouch
+    #   cron: "0 9 * * 1"           # Monday 09:00
+    #   script: jobs.update_btouch
     - name: backup_sqlite
       cron: "0 23 * * *"          # daily 23:00
       script: scripts.backup_sqlite

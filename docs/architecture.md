@@ -1,8 +1,8 @@
 # Architecture
 
-> 一张图 + 16 张表关系 + 跨模块调用图 + 异步架构.
+> 一张图 + 17 张表关系 + 跨模块调用图 + 异步架构 + B3 算法借力闭环.
 >
-> Last updated: 2026-05-16 (A-design async webhook + signed media URL + CTA placeholder closed). 详细 PRD 见根目录三份 .md.
+> Last updated: 2026-05-19 (W22-W24 ship: T-02..T-08 · 4 new jobs · 3 migrations · 17 tables · 16 cron). 详细 PRD 见根目录三份 .md.
 
 ---
 
@@ -64,13 +64,24 @@
 │  jobs/weekly_reporter (周日 18:00) ──→ runtime/weekly_report_*.md    │
 │  jobs/monthly_reporter (月末)      ──→ runtime/monthly_report_*.md   │
 │                                                                      │
-│  SQLite state.db ★ 唯一真相源 (16 张表 / 9 migrations)               │
+│  ── B3 algorithm-borrow nudges (W22-W24 ship 2026-05-19) ───────     │
+│  jobs/reply_density_alert (every */10 min) ──→ Lark P2 + sets        │
+│         publishings.reply_alert_sent                                 │
+│  jobs/linkedin_engagement_alert (every */10 min) ──→ Lark P2 + sets  │
+│         publishings.engagement_alert_sent                            │
+│  jobs/custom_slice_generator (manual / post-adapter) ──→ MiniMaxi    │
+│         LLM → runtime/drafts/<p>/custom_slice_<handle>.{md,canva.json}│
+│  jobs/kol_relation_tracker (daily 09:01 · opt-in cron)               │
+│         log-dm CLI: writes kol_dm_log                                │
+│         scan: GET X API → marks kol_replied_at, tier auto-promote    │
+│                                                                      │
+│  SQLite state.db ★ 唯一真相源 (17 张表 / 12 migrations)              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2 · 16 张表关系
+## 2 · 17 张表关系
 
 ```
 pieces ──1:N──→ state_events           (审计日志)
@@ -78,6 +89,10 @@ pieces ──1:N──→ state_events           (审计日志)
    │ 1:N
    ▼
 publishings ──1:N──→ metrics_daily     (30m / 24h / 7d 三时点)
+   │  ★ migration 011 (2026-05-19): scheduled_at column + composite index
+   │     (platform, scheduled_at) — T-05/T-07 30min alert anchor
+   │  ★ migration 010 (2026-05-19): reply_alert_sent + engagement_alert_sent
+   │     sentinel columns — fire-once-per-row idempotency
 
 mpt_tasks ★ async render state machine (2026-05-16 加入)
    pending_submit → submitted → completed | failed | stale
@@ -85,6 +100,12 @@ mpt_tasks ★ async render state machine (2026-05-16 加入)
 
 candidates  (路 1-6 汇合 · 被 Ranker 消费 → 升级为 pieces)
 kol_watchlist (KOL Watch 写入 → 候选池路 2)
+   ▲
+   │ soft FK on handle · log-dm auto-upsert · scan tier-promote
+   │
+kol_dm_log ★ migration 012 (2026-05-19): KOL 触达日志
+   kind: reply | dm | quote | custom_slice
+   sent_at → kol_replied_at (scan polls X API) → kol_quote_count → tier B→A
 
 landing_metrics (GA4)
 btouch_daily    (TaskOn 6 触点)
@@ -98,7 +119,7 @@ weekly_aggregates  (5 维 × N 值 / 周 · 喂 Reporter + Ranker 调权)
 
 heartbeat        (每个 job 跑完写 1 行)
 publish_failures (P0/P1/P2 告警留底)
-schema_migrations (DDL 版本 · 当前 9 个)
+schema_migrations (DDL 版本 · 当前 12 个)
 ```
 
 ---
@@ -126,14 +147,19 @@ schema_migrations (DDL 版本 · 当前 9 个)
         │      └───────────────────────┘    │
         │                  ▲                │
    ┌────┴─────────────────┴────────────────┴───────┐
-   │ jobs/* (12 个 cron)                            │
-   │  voice_checker, utm_generator,                 │
+   │ jobs/* (16 个 cron + 2 manual / opt-in)        │
+   │  voice_checker (T-04: +X 主推无外链规则),       │
+   │  utm_generator,                                │
    │  adapter_orchestrator, update_btouch,          │
    │  topic_ranker, metrics_collector,              │
    │  attribution_engine, kol_watch,                │
    │  weekly_reporter, monthly_reporter,            │
    │  mpt_runner ★ async submit-and-exit,           │
    │  mpt_reconciler ★ every-5min self-heal         │
+   │  reply_density_alert ★★ every */10 min (T-05)  │
+   │  linkedin_engagement_alert ★★ */10 min (T-07)  │
+   │  custom_slice_generator ★★ manual (T-02)       │
+   │  kol_relation_tracker ★★ daily opt-in (T-03)   │
    │  + jobs/mpt_post_callback (shared helper)      │
    └─────────────┬──────────────────────────────────┘
                  │
@@ -204,7 +230,10 @@ pending_submit ─► submitted ─► completed   (callback OR reconciler 抢�
 |---|---|---|
 | 每 5 分钟 | **mpt_reconciler ★** | mpt_tasks (自愈丢失 callback) |
 | 每 5 分钟 | container_heartbeat | heartbeat (容器存活心跳) |
-| 每日 08:30 | kol_daily_replier | runtime/kol_reply_candidates_*.md |
+| **每 10 分钟** | **reply_density_alert ★★** | publishings.reply_alert_sent · Lark P2 nudge (B3 §2 杠杆 1) |
+| **每 10 分钟** | **linkedin_engagement_alert ★★** | publishings.engagement_alert_sent · Lark P2 nudge (B3 §4 杠杆 1) |
+| 每日 08:30 | kol_daily_replier | runtime/kol_reply_candidates_*.md (旁支 · cron 暂注释) |
+| **每日 09:01 (opt-in)** | **kol_relation_tracker scan ★★** | kol_dm_log.kol_replied_at + kol_watchlist.tier (旁支 · cron 暂注释 · uncomment 后启用) |
 | 每日 20:00 | metrics_collector | metrics_daily / landing_metrics / newsletter_* / btouch_daily |
 | 每日 21:00 | attribution_engine | user_journey / leads (4 模型 last/first/linear/markov) |
 | 每日 23:00 | backup_sqlite | (备份文件) |
@@ -213,12 +242,14 @@ pending_submit ─► submitted ─► completed   (callback OR reconciler 抢�
 | 周日 10:00 | kol_watch | candidates (route=2) / kol_topics_*.json |
 | 周日 18:00 | weekly_reporter | weekly_aggregates / weekly_report_*.md |
 | 周日 20:00 | topic_ranker | candidates (status=picked) / selection_*.md |
-| 周日 22:00 | **schedule_planner ★** | publishings (inject_cta + signed media URL) |
-| 月 25 日 09:00 | newsletter_assembler | runtime/newsletter_draft_*.md (dry-run) |
+| 周日 22:00 | **schedule_planner ★** | publishings (inject_cta + signed media URL + scheduled_at + role/account) |
+| 月 25 日 09:00 | newsletter_assembler | runtime/newsletter_draft_*.md (dry-run · 旁支 · cron 暂注释) |
 | 月末周日 19:00 | monthly_reporter | monthly_report_*.md |
 | 月末周日 19:30+ | cohort_analysis / ab_aggregator / channel_attribution | aggregated tables |
+| **manual / post-adapter** | **custom_slice_generator ★★** | runtime/drafts/<piece>/custom_slice_*.{md,canva.json} · KOL DM 草稿 (B3 §1.3 模型 4) |
 
 ★ = A-design async webhook 改造涉及的 cron（2026-05-16）
+★★ = W22-W24 ship (2026-05-19) · B3 算法借力 + KOL 触达 + 矩阵号路由 (T-02..T-08)
 
 ---
 
@@ -254,6 +285,10 @@ pending_submit ─► submitted ─► completed   (callback OR reconciler 抢�
 | jobs/mpt_runner (async) | 写 mpt_tasks pending_submit 行 → MPT POST 失败 → mark_submit_failed + P1。**不再阻塞 5-10 min**。|
 | jobs/mpt_reconciler | 单行 handler 崩 → 继续下一行（不抢 batch）；6h 不到 terminal → mark stale + P1 |
 | jobs/weekly_reporter | LLM 失败 → P1 → 退化成"裸数据 markdown" (`render_bare_report`) |
+| **jobs/reply_density_alert** (T-05) | 单行 Lark 失败 → counts['errors']++ + 继续下一行；DB UPDATE 失败 → 同；空结果 → status='ok' rows=0 |
+| **jobs/linkedin_engagement_alert** (T-07) | 同上 · Lark + DB 失败不传染下一行；nudge-only,永不调 LinkedIn API |
+| **jobs/custom_slice_generator** (T-02) | LLM 失败 → 单 KOL skip + P2;全失败(0 generated)→ P1 + status='failed';URL 漏出 → server 端 regex scrub 成 `[URL-removed-by-engine]` |
+| **jobs/kol_relation_tracker** (T-03) | X API 失败 → P2 + 单行 last_checked_at 续 stamping(防 tight loop);全失败 → status='warning';tier promote 失败 → P2 不阻塞其他行 |
 
 **纪律**：所有 job 入口必须 `try: ... finally: db.heartbeat.record(...)` 包裹，保证心跳一定写。
 
@@ -275,6 +310,10 @@ pending_submit ─► submitted ─► completed   (callback OR reconciler 抢�
 | **/api/mpt-callback** ★ | HMAC verify + transition + spawn | <100ms 同步 (下载在 daemon thread) |
 | **/api/media/<p>/<f>** ★ | 30MB mp4 流式 | bandwidth-bound (Range + 304 支持) |
 | **schedule_planner** | 1 piece 6 平台 | 20-40s (含 yt_metadata LLM derive) |
+| **reply_density_alert** ★★ | 0-N rows in 2-min window | <1s 一轮（多数 tick 0 行）|
+| **linkedin_engagement_alert** ★★ | 同上 | <1s 一轮 |
+| **custom_slice_generator** ★★ | 1 piece × 3 KOL | 12-30s (3 次 LLM JSON) |
+| **kol_relation_tracker scan** ★★ | ≤50 rows × X API | <30s 一轮（少数 tick 真有 reply）|
 
 超出 2× 期望耗时 → 进 [troubleshooting.md §9](troubleshooting.md)。
 
@@ -490,10 +529,97 @@ postiz:
     ...
   cta_url_kind: long_url       # ★ H.1 决策：long_url（待 l.taskon.xyz 上 tunnel 后切 short_url）
 
+  # ★ 2026-05-19 新增 (T-08) · 矩阵号 cross-post 路由 (B3 §5.2)
+  routing:                     # platform → cross_post[{account, integration_id, offset_minutes}]
+    yt_shorts:
+      cross_post: []           # 默认空 · 等 Donald 连 2nd YT (taskon_official) 后 populate
+    linkedin_post:
+      cross_post: []
+    x_thread:
+      cross_post: []           # ★ DO NOT POPULATE (B3 §2 杠杆 1 27-人 Quote 算法降权)
+    ...
+
 schedule_planner:
   slots: {...}                 # 跨平台错峰窗口
   draft_filenames: {...}       # platform → markdown 文件名
 ```
+
+---
+
+## 12 · B3 算法借力 + KOL 触达 + 矩阵号路由（2026-05-19）★ 新增
+
+### 12.1 · 为什么需要
+
+B3 模块（内容分发与放大）有 7 段：KOL SOP / X 算法 / YT 算法 / LinkedIn 算法 / 矩阵协同 / 客户联创 / 投稿 Space。其中 6 段需要 engine 支持（客户联创 + 投稿是纯 BD 人工动作）。W22-W24 三周 ship 了 T-02..T-08 共 7 个工程任务。
+
+完整 roadmap → [B3_engine_落地路线_v1.md](B3_engine_落地路线_v1.md)。
+
+### 12.2 · 数据流（4 路新增 + 1 路加强）
+
+```
+[T-04 · voice_checker 加 X 主推无外链规则]
+  drafts/<piece>/xthread_final.md
+       ↓ jobs.voice_checker
+  voice_report_x_thread.md (新增 "Algorithm Rules" 段)
+       ↓ Donald 评审
+  通过 → state=reviewed；FAIL → 兼职女生改稿
+
+[T-05 · X Reply 密度提醒 / T-07 · LinkedIn 回评提醒]
+  publishings (scheduled_at + role + account)
+       ↓ schedule_planner 周日 22:00 写入 (★ migration 011)
+  scheduled_at = Postiz-promised 发布时刻 (UTC)
+       ↓ Postiz 真发
+  实际发布时刻 ≈ scheduled_at
+       ↓ */10 min cron tick
+  reply_density_alert / linkedin_engagement_alert 扫
+       ↓ if scheduled_at in [now-31min, now-29min]
+       ↓    AND <col>_alert_sent IS NULL
+  Lark P2 nudge + stamp publishings.<col>_alert_sent (idempotent)
+
+[T-02 · Custom Slice]
+  drafts/<piece>/selection_card.yaml + config/kol_watchlist.yaml
+       ↓ jobs.custom_slice_generator (manual / post-adapter)
+       ↓ 1. token-overlap match → top-N KOLs (tier A 优先)
+       ↓ 2. for each KOL: llm.complete_json(custom_slice prompt)
+       ↓ 3. URL scrub + write outputs
+  drafts/<piece>/custom_slice_<handle>.md  (DM 草稿 · Donald 手发)
+  drafts/<piece>/custom_slice_<handle>.canva.json  (兼职女生 Canva 改图参数)
+
+[T-03 · KOL 关系状态机]
+  Donald 手发 Reply/DM → CLI: kol_relation_tracker log-dm ...
+       ↓ INSERT kol_dm_log (kol_handle, kind, donald_tweet_id, sent_at)
+       ↓ UPSERT kol_watchlist.last_dm_date
+  daily 09:01 cron (opt-in) → kol_relation_tracker scan
+       ↓ for each kol_dm_log WHERE kol_replied_at IS NULL AND sent_at > now-7d
+       ↓   GET X API replies(donald_tweet_id) → find reply by KOL author_id
+       ↓ if found: stamp kol_replied_at, kol_reply_tweet_id
+       ↓ check 90d quote count → if ≥ 3: UPSERT kol_watchlist.tier = 'A' + P2 Lark
+
+[T-08 · Matrix routing]
+  config.yaml :: postiz.routing.<platform>.cross_post
+       ↓ schedule_planner.build_schedule()
+       ↓ for each platform: 1 primary plan + N cross_post plans (offset_minutes 延后)
+  publishings (1 piece × M platforms × (1 primary + K cross_post) rows)
+       ↓ Postiz 按各自 scheduled_at + integration_id 发到不同账号
+```
+
+### 12.3 · 关键文件
+
+* T-04: `jobs/voice_checker.py` (`_check_x_first_tweet_no_https` + `algo_rule_violations` field)
+* T-05: `jobs/reply_density_alert.py` · cron `*/10 * * * *`
+* T-07: `jobs/linkedin_engagement_alert.py` · cron `*/10 * * * *`
+* T-02: `jobs/custom_slice_generator.py` + `config/prompts/custom_slice.txt`
+* T-03: `jobs/kol_relation_tracker.py` (log-dm + scan) + `lib/migrations/012_kol_dm_log.sql`
+* T-06: `lib/yt_metadata.py` (title_variants + thumbnail_specs fields) + `config/prompts/yt_metadata.txt`
+* T-08: `config.yaml :: postiz.routing` + `jobs/schedule_planner.py` (build_schedule emits primary+cross_post)
+* migrations: 010 (publishings.{reply,engagement}_alert_sent) · 011 (publishings.scheduled_at + index) · 012 (kol_dm_log table)
+
+### 12.4 · 红线（不可让渡）
+
+* **engine 永不发推 / 永不 DM / 永不评 LinkedIn** · T-05/T-07 只产 Lark P2 提醒;T-02 只产 markdown 草稿;T-03 scan 只读 X API 反应,不写 X
+* **X Quote chain 永不启用** (B3 §2 杠杆 1) · config.yaml routing.x_thread / x_short 标 ★ DO NOT POPULATE
+* **LLM 永远只用 MiniMaxi 包月** · 不加 Anthropic per-token fallback (user_llm_cost_constraint)
+* **KOL 旁支永不传染主链** · T-02/T-03 失败 → P2 + skip · 不阻塞主链 publish
 
 ---
 
@@ -502,3 +628,4 @@ schedule_planner:
 - 2026-05-13 · 初版（10 jobs + 15 表）
 - 2026-05-15 · 加 mpt_runner / utm_generator / 落地页 dist
 - **2026-05-16 · A-design async webhook + signed media + CTA placeholder 三大改造完成，piece 02 首次真上 YouTube**
+- **2026-05-19 · W22-W24 ship · T-02..T-08 (B3 算法借力 + KOL 触达 + 矩阵号路由) · 4 new jobs · 3 migrations · 17 表 · 16 cron · 加 §12 节 · 249/249 pytest 全过(py3.12.13) · supercronic 2026-05-19 09:01 reload 完成**

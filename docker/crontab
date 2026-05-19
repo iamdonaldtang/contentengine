@@ -9,20 +9,25 @@
 # Edit this file → rebuild image (or bind-mount it for hot edits during dev).
 
 # ─── Daily jobs ──────────────────────────────────────────────────────────────
-30  8 * * *  cd /app && python -m jobs.kol_daily_replier
+# 30  8 * * *  cd /app && python -m jobs.kol_daily_replier   # disabled 2026-05-18: 暂停 KOL 监控
+# KOL side-chain T-03 (B3 §1.4 · ship 2026-05-18). NOT part of main publish chain
+# — polls X API for KOL replies to Donald's logged DMs, auto-promotes tier B→A on
+# threshold. Cheap (≤ 50 X reads/day). Donald enables by uncommenting below
+# after he's started using `kol_relation_tracker log-dm` to record outreach.
+# 1  9 * * *   cd /app && python -m jobs.kol_relation_tracker scan
 0 20 * * *   cd /app && python -m jobs.metrics_collector
 0 21 * * *   cd /app && python -m jobs.attribution_engine
 0 23 * * *   cd /app && python -m scripts.backup_sqlite
 
 # ─── Weekly jobs ─────────────────────────────────────────────────────────────
-0 10 * * 0   cd /app && python -m jobs.kol_watch
+# 0 10 * * 0   cd /app && python -m jobs.kol_watch          # disabled 2026-05-18: 暂停 KOL 监控
 0 18 * * 0   cd /app && python -m jobs.weekly_reporter
 30 18 * * 0  cd /app && python -m jobs.performance_analyzer
 0 19 * * 0   cd /app && python -m jobs.monthly_reporter
 0 20 * * 0   cd /app && python -m jobs.topic_ranker
 
 # ─── Weekday jobs ────────────────────────────────────────────────────────────
-0  9 * * 1   cd /app && python -m jobs.update_btouch
+# 0  9 * * 1   cd /app && python -m jobs.update_btouch       # disabled 2026-05-18: 暂停 btouch 回写
 
 # ─── Monday 11:00 · MPT video render for every drafted piece ─────────────────
 # Adapter writes shorts_60s.md by 09:30; allow 90 min of buffer.
@@ -38,7 +43,8 @@
 # ─── Monthly Newsletter (25th 09:00 → draft preview; penultimate Wed → real send) ───
 # 25th 09:00: Cowork's `email-sequence` skill writes runtime/newsletter_draft_YYYY-MM.md
 # (this engine cron runs in dry-run mode so Donald sees a preview HTML for review).
-0 9 25 * *   cd /app && f=runtime/newsletter_draft_$(date +%Y-%m).md; test -f "$f" && python -m jobs.newsletter_assembler --draft-path "$f" --dry-run || true
+# disabled 2026-05-18: 暂停 newsletter — listmonk 旁支模块未连通，主链不依赖
+# 0 9 25 * *   cd /app && f=runtime/newsletter_draft_$(date +%Y-%m).md; test -f "$f" && python -m jobs.newsletter_assembler --draft-path "$f" --dry-run || true
 
 # ─── Monthly jobs (1st Sunday of month) ──────────────────────────────────────
 # `dom=1-7 dow=0` = "Sunday between day-of-month 1 and 7" = 1st Sunday.
@@ -55,6 +61,17 @@
 # GETs MPT, atomically transitions on terminal state, spawns mp4 download.
 # Cheap GET-only — no work if nothing pending.
 */5 * * * *  cd /app && python -m jobs.mpt_reconciler
+
+# ─── 30-min post-publish algorithm-borrow nudges (every 10 minutes) ──────────
+# B3 §2 杠杆 1 + §4 杠杆 1 (2026-05-18 ship · T-05 / T-07).
+# Each tick scans publishings.scheduled_at in the [now-31min, now-29min]
+# window; the 2-min firing window tolerates ±1 min cron drift while staying
+# narrow enough that a delayed tick doesn't double-fire on the same row.
+# Both jobs are NUDGE-ONLY (B1 §6 红线 — engine never auto-posts):
+#   * reply_density_alert  → P2 Lark ping for 5-人 Reply 队伍 on X
+#   * linkedin_engagement  → P2 Lark ping for Donald to回 ≥5 LinkedIn comments
+*/10 * * * *  cd /app && python -m jobs.reply_density_alert
+*/10 * * * *  cd /app && python -m jobs.linkedin_engagement_alert
 
 # ─── Health heartbeat (every 5 minutes) ──────────────────────────────────────
 # Writes a row to `heartbeat` table so Cowork dashboard knows the container is

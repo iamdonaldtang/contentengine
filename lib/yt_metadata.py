@@ -76,6 +76,13 @@ class YouTubeMetadata:
 
     All consumers should obtain this via :func:`load_or_derive` rather than
     constructing it directly, so the 3-tier fallback path runs.
+
+    ``title_variants`` and ``thumbnail_specs`` (added 2026-05-18 · T-06) are
+    optional A/B test inputs Donald uploads manually to YouTube Studio's
+    "Test & Compare" feature (B3 §3 杠杆 2). They are NOT sent to Postiz —
+    ``to_postiz_settings()`` only emits the primary ``title`` / ``description``.
+    When the LLM produces them, they get persisted to ``yt_metadata_auto.yaml``
+    so Donald can copy them into YT Studio.
     """
     title: str
     description: str
@@ -85,6 +92,12 @@ class YouTubeMetadata:
     not_made_for_kids: bool = True
     thumbnail_path: str | None = None
     source: Literal["cowork", "llm_auto", "fallback"] = "cowork"
+    # T-06 · B3 §3 杠杆 2 · YT A/B test (Test & Compare) inputs. Empty = no
+    # variants supplied (legacy pieces). Non-empty MUST have exactly 3 entries
+    # (validated by _validate). Donald sets up Test & Compare manually in
+    # YT Studio; engine does not call YT Data API.
+    title_variants: list[str] = field(default_factory=list)
+    thumbnail_specs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_postiz_settings(self) -> dict[str, Any]:
         """Translate to the Postiz YouTube integration's ``settings`` shape.
@@ -180,6 +193,42 @@ def _validate(raw: dict[str, Any]) -> None:
             "schedule_planner will append URL on its own line as fallback"
         )
 
+    # T-06 · A/B test variants (optional). When present, both must be lists
+    # of exactly 3 (B3 §3 杠杆 2 says "3 版缩略图 + 3 版标题"). Empty list is
+    # also allowed for backward compatibility with pre-T-06 LLM output / Cowork
+    # yamls that don't supply them.
+    tv = raw.get("title_variants")
+    if tv is not None:
+        if not isinstance(tv, list):
+            raise MetadataValidationError("title_variants must be a list when present")
+        if tv and len(tv) != 3:
+            raise MetadataValidationError(
+                f"title_variants must have exactly 3 entries when non-empty; got {len(tv)}"
+            )
+        for i, v in enumerate(tv):
+            if not isinstance(v, str) or not v.strip():
+                raise MetadataValidationError(f"title_variants[{i}] must be non-empty str")
+            if len(v) > TITLE_MAX:
+                raise MetadataValidationError(
+                    f"title_variants[{i}] length {len(v)} > {TITLE_MAX}"
+                )
+    ts = raw.get("thumbnail_specs")
+    if ts is not None:
+        if not isinstance(ts, list):
+            raise MetadataValidationError("thumbnail_specs must be a list when present")
+        if ts and len(ts) != 3:
+            raise MetadataValidationError(
+                f"thumbnail_specs must have exactly 3 entries when non-empty; got {len(ts)}"
+            )
+        for i, spec in enumerate(ts):
+            if not isinstance(spec, dict):
+                raise MetadataValidationError(f"thumbnail_specs[{i}] must be a dict")
+            for key in ("text_overlay", "color", "position"):
+                if not spec.get(key) or not isinstance(spec[key], str):
+                    raise MetadataValidationError(
+                        f"thumbnail_specs[{i}].{key} must be a non-empty str"
+                    )
+
 
 def _coerce(raw: dict[str, Any], default_privacy: str, source: str) -> YouTubeMetadata:
     """Apply defaults + cast types. Assumes raw already passed _validate."""
@@ -192,6 +241,8 @@ def _coerce(raw: dict[str, Any], default_privacy: str, source: str) -> YouTubeMe
         not_made_for_kids=bool(raw.get("not_made_for_kids", True)),
         thumbnail_path=raw.get("thumbnail_path") or None,
         source=source,  # type: ignore[arg-type]
+        title_variants=list(raw.get("title_variants") or []),
+        thumbnail_specs=list(raw.get("thumbnail_specs") or []),
     )
 
 
@@ -308,7 +359,9 @@ def _try_derive_via_llm(
             schema_hint=(
                 '{title: str (≤95 chars), description: str (≤5000), '
                 'privacy: "public"|"unlisted"|"private", tags: list[str ≤8], '
-                'category_id: int, not_made_for_kids: bool}'
+                'category_id: int, not_made_for_kids: bool, '
+                'title_variants: list[str ≤95] exactly 3, '
+                'thumbnail_specs: list[{text_overlay, color, position, rationale}] exactly 3}'
             ),
         )
     except LLMClientError as exc:

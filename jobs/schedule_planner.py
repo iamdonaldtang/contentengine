@@ -250,12 +250,22 @@ def _load_utm_links(piece_dir: Path) -> dict[str, Any] | None:
 def _pick_utm_for_platform(
     utm_links: dict[str, Any],
     platform_key: str,
+    account: str | None = None,
 ) -> dict[str, str | None]:
     """Pull (utm_campaign, utm_content, utm_term) from utm_links.json.
 
     Tolerates two shapes the utm_generator may emit:
         a)  ``{"<platform>": {"campaign":..., "content":..., "term":...}}``
         b)  ``{"<platform>": {"<account>": {...}}}`` (per-account fan-out)
+
+    Args:
+        utm_links: Parsed ``utm_links.json`` blob.
+        platform_key: Engine platform key, e.g. ``yt_shorts``.
+        account: When set, prefer the account-keyed sub-blob (shape b) over
+            the flat (shape a) lookup. Used by T-08 matrix routing where the
+            same platform fires for multiple accounts (donald_en primary +
+            taskon_official cross-post). When None, falls back to whatever
+            sub-dict appears first (legacy single-account behaviour).
 
     Returns ``{"utm_campaign": ..., "utm_content": ..., "utm_term": ...}``
     with ``None`` values when a segment isn't present. The schedule_planner
@@ -283,14 +293,25 @@ def _pick_utm_for_platform(
             blob = utm_links.get(alias)
     if not isinstance(blob, dict):
         return out
-    # Flat shape (a)
     flat_keys = {"campaign", "content", "term"}
+    # Per-account fan-out shape (b) when caller passed an account hint —
+    # T-08 matrix routing needs per-account UTM differentiation so GA4 can
+    # tell "Donald EN YT vs TaskOn Official YT" apart.
+    if account and account in blob and isinstance(blob[account], dict):
+        sub = blob[account]
+        if flat_keys & sub.keys():
+            out["utm_campaign"] = sub.get("campaign")
+            out["utm_content"] = sub.get("content")
+            out["utm_term"] = sub.get("term")
+            return out
+    # Flat shape (a)
     if flat_keys & blob.keys():
         out["utm_campaign"] = blob.get("campaign")
         out["utm_content"] = blob.get("content")
         out["utm_term"] = blob.get("term")
         return out
-    # Per-account fan-out shape (b): pick the first sub-dict.
+    # Per-account fan-out shape (b) without an account hint: pick the first
+    # sub-dict (legacy single-account behaviour).
     for sub in blob.values():
         if isinstance(sub, dict) and flat_keys & sub.keys():
             out["utm_campaign"] = sub.get("campaign")
@@ -329,9 +350,10 @@ def build_schedule(
     """
     cfg = cfg or _load_config()
     sp_cfg = cfg.get("schedule_planner") or {}
-    integrations: dict[str, str] = (
-        (cfg.get("postiz") or {}).get("integrations") or {}
-    )
+    postiz_cfg = cfg.get("postiz") or {}
+    integrations: dict[str, str] = postiz_cfg.get("integrations") or {}
+    accounts_map: dict[str, str] = postiz_cfg.get("accounts") or {}
+    routing_cfg: dict[str, Any] = postiz_cfg.get("routing") or {}
     slots: dict[str, list[int]] = sp_cfg.get("slots") or {}
     filenames: dict[str, str] = sp_cfg.get("draft_filenames") or {}
     tz_name = sp_cfg.get("timezone") or "America/New_York"
@@ -360,6 +382,8 @@ def build_schedule(
         if not fname:
             plans.append({
                 "platform": platform_key,
+                "account": accounts_map.get(platform_key, "donald_en"),
+                "role": "primary",
                 "integration_id": integrations.get(platform_key, ""),
                 "content": None,
                 "scheduled_at": None,
@@ -371,8 +395,10 @@ def build_schedule(
             continue
         content = _read_text_file(piece_dir / fname)
 
-        # UTM
-        utm = _pick_utm_for_platform(utm_links or {}, platform_key) if utm_links else {
+        primary_account = accounts_map.get(platform_key, "donald_en")
+        utm = _pick_utm_for_platform(
+            utm_links or {}, platform_key, account=primary_account,
+        ) if utm_links else {
             "utm_campaign": None, "utm_content": None, "utm_term": None,
         }
 
@@ -385,18 +411,80 @@ def build_schedule(
         elif not integrations.get(platform_key):
             skip_reason = f"postiz.integrations.{platform_key} not configured"
 
-        scheduled_at = compute_slot_datetime(base_monday, weekday, hour, tz)
+        primary_scheduled_at = compute_slot_datetime(base_monday, weekday, hour, tz)
 
         plans.append({
             "platform": platform_key,
+            "account": primary_account,
+            "role": "primary",
             "integration_id": integrations.get(platform_key, ""),
             "content": content,
-            "scheduled_at": scheduled_at,
+            "scheduled_at": primary_scheduled_at,
             "utm_campaign": utm["utm_campaign"],
             "utm_content": utm["utm_content"],
             "utm_term": utm["utm_term"],
             "skip_reason": skip_reason,
         })
+
+        # T-08 matrix cross-post (B3 §5.2). Each entry produces an additional
+        # plan with the same content + media but a different (account,
+        # integration_id) pair and a delayed scheduled_at. Default config
+        # has empty cross_post lists for every platform, so this loop is a
+        # no-op until Donald connects secondary accounts.
+        platform_routing = routing_cfg.get(platform_key) or {}
+        cross_post = platform_routing.get("cross_post") or []
+        if not isinstance(cross_post, list):
+            logger.warning(
+                "routing.%s.cross_post is not a list (got %s) — skipping",
+                platform_key, type(cross_post).__name__,
+            )
+            cross_post = []
+        for idx, entry in enumerate(cross_post):
+            if not isinstance(entry, dict):
+                logger.warning(
+                    "routing.%s.cross_post[%d] not a dict (got %s) — skipping",
+                    platform_key, idx, type(entry).__name__,
+                )
+                continue
+            cp_account = entry.get("account")
+            cp_integration = entry.get("integration_id")
+            cp_offset = entry.get("offset_minutes")
+            if not (cp_account and cp_integration and isinstance(cp_offset, (int, float))):
+                logger.warning(
+                    "routing.%s.cross_post[%d] missing required fields "
+                    "(account/integration_id/offset_minutes) — skipping: %r",
+                    platform_key, idx, entry,
+                )
+                continue
+            if cp_offset <= 0:
+                logger.warning(
+                    "routing.%s.cross_post[%d] non-positive offset_minutes=%s — skipping",
+                    platform_key, idx, cp_offset,
+                )
+                continue
+            cp_scheduled_at = primary_scheduled_at + dt.timedelta(minutes=int(cp_offset))
+            cp_utm = _pick_utm_for_platform(
+                utm_links or {}, platform_key, account=cp_account,
+            ) if utm_links else {
+                "utm_campaign": None, "utm_content": None, "utm_term": None,
+            }
+            cp_skip: str | None = None
+            if utm_links is None:
+                cp_skip = "utm_links.json missing — UTM is mandatory (B1 §4)"
+            elif content is None:
+                cp_skip = f"draft missing: {fname}"
+            plans.append({
+                "platform": platform_key,
+                "account": cp_account,
+                "role": "cross_post",
+                "integration_id": cp_integration,
+                "content": content,
+                "scheduled_at": cp_scheduled_at,
+                "utm_campaign": cp_utm["utm_campaign"],
+                "utm_content": cp_utm["utm_content"],
+                "utm_term": cp_utm["utm_term"],
+                "skip_reason": cp_skip,
+            })
     return plans
 
 
@@ -415,6 +503,19 @@ def _persist_publishing(
         else:
             post_id = postiz_response.get("id") or postiz_response.get("releaseId")
 
+    # Store the scheduled publish moment in UTC SQLite-native format
+    # (``YYYY-MM-DD HH:MM:SS``) so cron queries can compare it directly
+    # against ``datetime('now','-31 min')``. Anchor for T-05/T-07 30-min
+    # post-publish nudges (see migration 011).
+    sched_dt = plan.get("scheduled_at")
+    scheduled_at_utc: str | None
+    if isinstance(sched_dt, dt.datetime):
+        scheduled_at_utc = (
+            sched_dt.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        )
+    else:
+        scheduled_at_utc = None
+
     pub_id = db.publishings.upsert(
         piece_id=piece_id,
         platform=plan["platform"],
@@ -426,6 +527,7 @@ def _persist_publishing(
         # publish; metrics_collector backfills published_at when the
         # /analytics endpoint returns it.
         published_at=None,
+        scheduled_at=scheduled_at_utc,
     )
     db.state_events.log(
         piece_id,
@@ -597,7 +699,9 @@ def run(
         # this (platform, account) pair. Falls back to appending the URL when
         # no placeholder is present (legacy markdown without SOP) — emits a
         # WARN so the author notices for next piece. 2026-05-16 introduction.
-        cta_account = accounts_map.get(plat, "donald_en")
+        # T-08 (2026-05-18): account now comes from the plan itself, not the
+        # platform-level accounts_map, so cross_post plans get their own CTA.
+        cta_account = plan.get("account") or accounts_map.get(plat, "donald_en")
         cta_url = _pick_cta_url(utm_links, plat, cta_account, kind=cta_kind)
         cta_label = "no_cta_url"
         if cta_url:
@@ -633,9 +737,11 @@ def run(
 
         if dry_run:
             logger.info(
-                "DRY-RUN · piece=%s platform=%s scheduled_at=%s utm_campaign=%s "
-                "integration=%s cta=%s %s",
+                "DRY-RUN · piece=%s platform=%s role=%s account=%s scheduled_at=%s "
+                "utm_campaign=%s integration=%s cta=%s %s",
                 piece_id, plat,
+                plan.get("role", "primary"),
+                plan.get("account", "(none)"),
                 plan["scheduled_at"].isoformat(),
                 plan["utm_campaign"],
                 (plan["integration_id"][:8] + "...") if plan["integration_id"] else "(empty)",
@@ -644,6 +750,8 @@ def run(
             )
             entry: dict[str, Any] = {
                 "platform": plat,
+                "role": plan.get("role", "primary"),
+                "account": plan.get("account"),
                 "status": "dry_run",
                 "scheduled_at": plan["scheduled_at"].isoformat(),
                 "utm_campaign": plan["utm_campaign"],

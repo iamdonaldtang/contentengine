@@ -37,9 +37,25 @@ TaskOn = Web3 增长平台,立场是「行业病灶诚实观察者」。8 矛盾
   "privacy": "public",
   "tags": ["tag1", "tag2", "..."],
   "category_id": 22,
-  "not_made_for_kids": true
+  "not_made_for_kids": true,
+  "title_variants": [
+    "≤ 95 字符 · 角度 1 (数字 / 反共识)",
+    "≤ 95 字符 · 角度 2 (人称问句 / 怀疑共识)",
+    "≤ 95 字符 · 角度 3 (案例 / 故事钩)"
+  ],
+  "thumbnail_specs": [
+    {"text_overlay": "≤ 12 字符 (一个数字或冲突词)", "color": "data-red | warning-yellow | shock-orange | trust-blue", "position": "top-left | center | bottom", "rationale": "≤ 40 字 · 为什么这个角度抓眼"},
+    {"text_overlay": "...", "color": "...", "position": "...", "rationale": "..."},
+    {"text_overlay": "...", "color": "...", "position": "...", "rationale": "..."}
+  ]
 }
 ```
+
+【A/B Test 字段附加纪律】(B3 §3 杠杆 2)
+9. **title_variants**:正好 3 条,**互相之间用不同的角度切入**(不要 3 条都用同一个数字)。``title`` 字段是你最推荐的版本,通常等于 title_variants 第 1 条 —— 但不强制相等。
+10. **thumbnail_specs**:正好 3 条 · 给兼职女生在 Canva 改图用的参数(不是渲染好的图)。``text_overlay`` 最长 12 字符(英文)/ 6 字 (中文),要在缩略图里大字突出。``color`` 只用列出的 4 种 token(``data-red`` / ``warning-yellow`` / ``shock-orange`` / ``trust-blue``)。``rationale`` 解释为什么这个角度抓眼。
+11. **3 条 thumbnail 必须明显差异**:不要 3 条都"红色 + 数字 top-left",至少在 color 或 position 或文案角度上要有结构差异。Donald 会上传到 YouTube Studio "Test & Compare" 让算法跑 7 天 A/B 测试,**3 条太像 = A/B 测试结果不显著**。
+12. 这两个字段都是**新增加的**(2026-05-18 T-06 ship)—— Donald 拿到 yt_metadata_auto.yaml 后手动到 YT Studio 设置 Test & Compare,**engine 不调 YT Data API 上传**(API 不支持 A/B 测试自动化)。
 
 【再次强调】
 - 不要编数字 — 脚本里没的数字别瞎加,引用脚本里出现过的数字

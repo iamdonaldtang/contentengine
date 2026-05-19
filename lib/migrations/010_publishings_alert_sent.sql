@@ -1,0 +1,32 @@
+-- Migration 010 · publishings alert sentinels for 30-min post-publish nudges
+--
+-- Background (B3 §2 杠杆 1 + B3 §4 杠杆 1):
+--   * jobs/reply_density_alert (T-05) wakes every 10 min and for any X post
+--     that crossed the 30-min mark since publication, fetches the reply count
+--     via X API; if < 5 replies, fires a P2 Lark nudge to Donald + 4 BD.
+--   * jobs/linkedin_engagement_alert (T-07) wakes every 10 min and for any
+--     LinkedIn post that crossed the 30-min mark, fires a P2 nudge reminding
+--     Donald to reply ≥5 comments (LinkedIn algorithm gives author-replies
+--     10x weight per B3 §4 杠杆 1). LinkedIn has no API to read comments,
+--     so the bot only nudges — it does not verify completion.
+--
+-- Both columns are timestamp sentinels: NULL = no alert sent yet; any value
+-- = alerted, do not re-fire. The cron WHERE clause filters
+--   WHERE <col> IS NULL AND scheduled_at BETWEEN now-31min AND now-29min
+-- which gives the alert a single 2-minute firing window per row, with the
+-- timestamp serving as both an idempotency lock and a forensic audit trail.
+--
+-- Why two columns instead of one: a piece can ship to both x_thread and
+-- linkedin_post the same week; the two alerts fire independently and we want
+-- per-platform tracking so manual rerun of one alert kind doesn't accidentally
+-- mark the other as already-sent.
+--
+-- The ``scheduled_at`` anchor column (the time these alerts trigger off of)
+-- is added in migration 011 — split because 010 had already been applied to
+-- the dev state.db before the anchor design was finalized.
+--
+-- Idempotency: schema_migrations gates re-runs. SQLite ALTER TABLE does not
+-- support IF NOT EXISTS, so the migration runner is the only safeguard.
+
+ALTER TABLE publishings ADD COLUMN reply_alert_sent DATETIME;
+ALTER TABLE publishings ADD COLUMN engagement_alert_sent DATETIME;

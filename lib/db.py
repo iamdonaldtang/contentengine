@@ -474,9 +474,32 @@ class _PublishingsAdapter:
         utm_content: str | None = None,
         utm_term: str | None = None,
         media_path: str | None = None,
+        scheduled_at: str | None = None,
     ) -> int:
-        # ``media_path`` is added by migration 008; tolerate the column being
-        # absent so older state.db files still upsert without crashing.
+        # ``media_path`` is added by migration 008 and ``scheduled_at`` by
+        # migration 011; tolerate either column being absent so older state.db
+        # files still upsert without crashing.
+        try:
+            cur = self._db.execute(
+                """
+                INSERT INTO publishings (piece_id, platform, external_post_id, postiz_post_id,
+                                         published_at, utm_campaign, utm_content, utm_term,
+                                         media_path, scheduled_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (piece_id, platform, external_post_id, postiz_post_id, published_at,
+                 utm_campaign, utm_content, utm_term, media_path, scheduled_at),
+            )
+            return cur.lastrowid or 0
+        except sqlite3.OperationalError as exc:
+            if "no such column" not in str(exc).lower():
+                raise
+            logger.warning(
+                "publishings missing scheduled_at/media_path column; falling back"
+            )
+
+        # Step 1 fallback: try the 9-column insert (post-migration-008,
+        # pre-migration-011 — has media_path but no scheduled_at).
         try:
             cur = self._db.execute(
                 """
@@ -488,13 +511,13 @@ class _PublishingsAdapter:
                 (piece_id, platform, external_post_id, postiz_post_id, published_at,
                  utm_campaign, utm_content, utm_term, media_path),
             )
+            return cur.lastrowid or 0
         except sqlite3.OperationalError as exc:
             if "no such column" not in str(exc).lower():
                 raise
-            # Pre-migration-008 schema — fall back to the original 8-column insert.
+            # Step 2 fallback: pre-migration-008 schema (original 8 columns).
             logger.warning(
-                "publishings.media_path column missing (migration 008 not applied?); "
-                "falling back to legacy insert"
+                "publishings.media_path also missing; falling back to legacy 8-column insert"
             )
             cur = self._db.execute(
                 """
@@ -505,7 +528,7 @@ class _PublishingsAdapter:
                 (piece_id, platform, external_post_id, postiz_post_id, published_at,
                  utm_campaign, utm_content, utm_term),
             )
-        return cur.lastrowid or 0
+            return cur.lastrowid or 0
 
     def set_media_path(self, publishing_id: int, media_path: str) -> None:
         """Stamp ``media_path`` on an existing publishings row (post-rendering)."""

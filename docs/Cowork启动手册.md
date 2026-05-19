@@ -2,14 +2,17 @@
 
 > **目的**:你今天/今晚就要在 Cowork 里第一次完整跑一条稿子,这份手册告诉你**3 个连接好的平台**(LinkedIn / LinkedIn Carousel / YouTube Shorts)端到端怎么走。
 >
-> **engine 当前状态**:
-> - ✅ 122 pytest 全过
+> **engine 当前状态**(2026-05-19 W22-W24 ship 后):
+> - ✅ 249 pytest 全过(container py3.12.13)
 > - ✅ Postiz API 完全打通(LinkedIn + YouTube 2 个 integration UUID 已写 config.yaml)
 > - ✅ MPT 视频渲染就位
 > - ✅ shlink 短链跑着(`l.taskon.xyz`)
-> - ✅ yt_metadata 三级 fallback(Cowork 优先 + LLM + 硬模板)
+> - ✅ yt_metadata 三级 fallback(Cowork 优先 + LLM + 硬模板)+ T-06 新增 `title_variants[3]` + `thumbnail_specs[3]`(YT Studio Test & Compare)
+> - ✅ W22-W24 ship · T-02..T-08 · 4 new cron jobs + 3 migrations
+> - ✅ supercronic 2026-05-19 09:01 重启 reload · T-05/T-07 已在 */10 min 调度
 > - ⚠️ X / Medium / TikTok 未连,会自动 skip(不阻塞)
 > - ⚠️ LinkedIn Carousel 需要 PDF 文件,本次先发文本版,Carousel PDF 留到 T15
+> - ⚠️ T-08 矩阵号 cross-post plumbing 就绪 · 但默认 `cross_post: []` · 待 Donald 连 2nd 账号 integration 后启用
 
 ---
 
@@ -169,6 +172,33 @@ docker compose exec engine python -c "from lib.db import db; row=db.mpt_tasks.ge
 
 ⚠️ **已废弃** `--timeout` 参数(旧 sync poll 用)。dropped callback 场景由 `jobs/mpt_reconciler` 每 5 min 自愈兜底。详见 [`architecture.md §9`](architecture.md)。
 
+### 3.4 · Custom Slice KOL DM 草稿 (可选 · 5 min) ★ T-02 W23 新增
+
+跑完 adapter 后,顺手为这条 piece 出 3 条 KOL Custom Slice DM 草稿:
+
+```
+docker compose exec engine python -m jobs.custom_slice_generator --piece-id 2026W20-thread01
+```
+
+engine 自动:
+1. 读 `selection_card.yaml` 抽 narrative_anchor / hook_type / key_data_points 做 token bag
+2. 跟 `config/kol_watchlist.yaml` 30 KOL 的 focus + angle 做 token-overlap 匹配
+3. 同分按 tier(A → B → C)排序 · 取 top-3
+4. MiniMaxi LLM 出每位 KOL 个性化 DM(≤280 字)+ Canva 改图参数 JSON
+
+输出:
+```
+drafts/2026W20-thread01/
+├── custom_slice_<handle1>.md       ← Donald 周四发布后 1h 内手发
+├── custom_slice_<handle1>.canva.json  ← 兼职女生 Canva 改图参数
+├── custom_slice_<handle2>.md
+└── custom_slice_<handle2>.canva.json
+```
+
+**红线**:engine 永不自动 DM · Donald 手发(B1 §6 + B3 §1.3 模型 4)。
+
+⚠️ 过滤:`content_type` 必须 in `{thread, long, methodology, case_study, data_insight, playbook}`,不在的话用 `--force` 跳过过滤。
+
 ---
 
 ## 4 · UTM 短链 (5 min)
@@ -265,6 +295,8 @@ schedule_planner done: planned=6 scheduled=3 skipped=3 failures=0 status=warning
 | **数据关** | 每个数字打开 DefiLlama / Dune / 内部 dashboard 比对 |
 | **可操作关** | 把自己当客户读一遍,回答"明天第一步做什么" |
 | **YT 元数据** | title 不别扭、description CTA 链接正确、tags 命中 SEO 关键词 |
+| **★ W22 新增 · Algorithm Rules 段** | 看 `voice_report_x_thread.md` 末尾 `## Algorithm Rules: PASS \| FAIL` 段 — FAIL 即 X 主推第 1 条含 `https://` 外链(B3 §2 杠杆 2 算法降权 30-50%)· 修复:把 URL 移到 thread 第 2 条自我 Reply |
+| **★ T-06 YT A/B variants** | 如有 yt_shorts,看 `yt_metadata_auto.yaml` 里 `title_variants[3]` + `thumbnail_specs[3]` · Donald 发布后到 YT Studio "Test & Compare" 手动 A/B 测试 |
 
 数据关失败 → **这条死了,不发**。**绝不允许** AI 改数字。
 
@@ -285,6 +317,25 @@ docker compose exec engine python -m jobs.schedule_planner --piece-id 2026W20-th
 | YouTube Shorts | 下周四 09:00 ET | `shorts_60s.mp4` + yt_metadata |
 
 跑完去 Postiz UI `http://localhost:4007` → Launches/Scheduled 应该看到 3 条新任务。
+
+### 8.1 · 30min 算法借力 Lark 自动提醒 ★ T-05 / T-07 W22 新增
+
+publishings 行写入后,`scheduled_at` 列存了 Postiz-promised 发布时刻(UTC)。每 10 分钟两个 cron 自动扫:
+
+| Job | 触发 | Lark 提醒 |
+|---|---|---|
+| `reply_density_alert` */10min | X 发后 30min(`platform LIKE 'x_%'`)| P2 · "X 主推发了 30min · 5-人 Reply 队伍 请上场 (B3 §2 杠杆 1)" |
+| `linkedin_engagement_alert` */10min | LinkedIn 发后 30min(`platform LIKE 'linkedin%'`)| P2 · "LinkedIn 发了 30min · 请回 ≥5 条评论 (B3 §4 杠杆 1)" |
+
+Idempotent: `publishings.<col>_alert_sent` sentinel 列 · 每 piece 每平台只 nudge 一次。
+
+**红线**:engine 只产生 Lark P2 提醒 · 永远不替你发 Reply / 回评论(B1 §6 + B3 纪律)。
+
+Donald 看到 Lark 后的动作:
+- X Thread → 立即打开 X,自己 + 4 BD 上 ≥1 条带新观点的 Reply(每条 ≥30 字)
+- LinkedIn → 立即打开 LinkedIn,给评论区前 5 条回复 1-2 句
+
+详见 [`Donald_每日操作手册_v1.md §2.8`](Donald_每日操作手册_v1.md)。
 
 ---
 
@@ -311,6 +362,10 @@ docker compose exec engine python -m jobs.schedule_planner --piece-id 2026W20-th
 | Postiz 通不通 | `docker compose exec engine python -c "from sources.postiz import postiz; print(len(postiz.list_integrations()))"` |
 | 容器日志 | `docker compose logs -f engine` |
 | 删一条没用的 piece | 删 `runtime/drafts/<piece_id>/` 整个目录 + `state.db` 里 pieces 表 |
+| **★ W22-W24 新增** 看 4 新 job 心跳 | `docker compose exec engine python -c "from lib.db import db; [print(dict(r)) for r in db.fetchall(\"SELECT job_name,last_run_at,status,rows_written FROM heartbeat WHERE job_name IN ('reply_density_alert','linkedin_engagement_alert','custom_slice_generator','kol_relation_tracker') ORDER BY last_run_at DESC LIMIT 12\")]"` |
+| **★ T-03** Donald 实发 KOL Reply 后记账 | `docker compose exec engine python -m jobs.kol_relation_tracker log-dm --kol @handle --kind reply --tweet-url https://x.com/.../status/<id> --piece-id <piece>` |
+| **★ T-03** 启用 KOL scan cron | 编辑 `docker/crontab` uncomment `1 9 * * *` 行 → `docker compose restart engine` |
+| **★ T-08** 启用矩阵号 cross-post | Donald 在 Postiz 连 2nd 账号 → 填 `config.yaml :: postiz.routing.<platform>.cross_post[0]` → 下次 schedule_planner 自动多排 |
 
 ---
 
@@ -336,3 +391,4 @@ docker compose exec engine python -m jobs.schedule_planner --piece-id 2026W20-th
 |---|---|---|
 | v0.1 | 2026-05-15 | 首版,T14 完成后写,3 平台真发就绪状态 |
 | v0.2 | 2026-05-16 | §3.3 mpt_runner 改 async submit-and-exit (删除 `--timeout`)。§5.1 yt_metadata.yaml description 改用 `{{CTA_URL}}` 占位符(不写真实 URL)。配套 [`architecture.md §9-§10`](architecture.md) async webhook + CTA placeholder 重大改造。**piece 02 首次真上 YouTube** [es7XQWghoSM](https://www.youtube.com/watch?v=es7XQWghoSM) |
+| **v0.3** | **2026-05-19** | **W22-W24 ship · 7 个 B3 任务 (T-02..T-08)**。§0 现状加 249 pytest + supercronic reload + 4 new cron jobs;§3.4 Custom Slice 出 KOL DM 草稿(T-02);§7 Donald 终审多看 `Algorithm Rules` 段(T-04)+ YT title_variants/thumbnail_specs(T-06);§8.1 30min Lark 自动提醒(T-05/T-07);§10 cheatsheet 加 4 新条目(看新 job 心跳 / log-dm / 启 T-03 cron / 启 T-08 路由)。详见 [`B3_engine_落地路线_v1.md`](B3_engine_落地路线_v1.md) + [`architecture.md §12`](architecture.md) |

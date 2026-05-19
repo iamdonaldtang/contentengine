@@ -150,14 +150,22 @@ class CheckResult:
     cta_ratio_max: float | None
     cta_pass: bool
     disabled_hits: list[WordHit] = field(default_factory=list)
+    # B3 §2/§3/§4 algorithm-borrow rules (e.g. "X 主推第 1 条禁 https 外链").
+    # Each entry is a human-readable violation description. Empty list = pass.
+    algo_rule_violations: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
-        return not self.disabled_hits and self.length_pass and self.cta_pass
+        return (
+            not self.disabled_hits
+            and self.length_pass
+            and self.cta_pass
+            and not self.algo_rule_violations
+        )
 
     @property
     def violation_count(self) -> int:
-        v = len(self.disabled_hits)
+        v = len(self.disabled_hits) + len(self.algo_rule_violations)
         if not self.length_pass:
             v += 1
         if not self.cta_pass:
@@ -232,6 +240,68 @@ def _find_disabled_hits(lines: list[str], words: list[str]) -> list[WordHit]:
                         snippet = snippet[:80] + "…"
                 hits.append(WordHit(word=word, line_no=line_no, snippet=snippet))
     return hits
+
+
+_X_THREAD_TWEET_SEPARATOR = re.compile(r"\n\s*-{3,}\s*\n")
+
+
+def _extract_x_first_tweet(raw_text: str) -> str | None:
+    """Return the body of the first real tweet in an X Thread markdown file.
+
+    Convention (see ``runtime/drafts/<piece>/xthread_final.md``):
+      * Tweets are separated by horizontal rules ``---`` on their own line.
+      * A leading block of ``#`` headings + ``>`` blockquote frontmatter
+        (e.g. "7 推 · ~1180 字 · hook_type: ...") is metadata, not 推 1.
+      * 推 1 is the first ``---``-delimited block whose content lines are
+        not ALL frontmatter (i.e. not all start with ``#`` or ``>``).
+
+    Returns the raw block text (including any inline ``**推 1**`` heading) or
+    ``None`` if no content block is found.
+    """
+    if not raw_text:
+        return None
+    blocks = _X_THREAD_TWEET_SEPARATOR.split(raw_text)
+    for block in blocks:
+        content_lines = [ln for ln in block.splitlines() if ln.strip()]
+        if not content_lines:
+            continue
+        if all(ln.lstrip().startswith(("#", ">")) for ln in content_lines):
+            # pure frontmatter — skip
+            continue
+        return block
+    return None
+
+
+def _check_x_first_tweet_no_https(
+    canonical_platform: str,
+    raw_text: str,
+) -> str | None:
+    """B3 §2 杠杆 2 · X 算法对带 https 主推降权 30-50%.
+
+    推 1 (主推 / X Thread 的第 1 条) 禁止任何 ``https?://`` 外链；外链必须放
+    第 1 个 Reply (自己 Reply 自己)。Returns a violation description or
+    ``None`` when the rule passes / is N/A.
+    """
+    if canonical_platform != "x_thread":
+        return None
+    first_tweet = _extract_x_first_tweet(raw_text)
+    if first_tweet is None:
+        return None
+    # ASCII-only URL chars (RFC 3986 unreserved + reserved). This stops the
+    # match at CJK punctuation, quotes, and whitespace so the displayed URL is
+    # accurate when Donald reads the report.
+    match = re.search(
+        r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        first_tweet,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    url = match.group(0).rstrip(".,;:!?)")
+    return (
+        f"X 主推（推 1）含 https 外链 `{url}` — B3 §2 杠杆 2 · "
+        "X 算法对带 https 主推降权 30-50% · 移到第 1 个自我 Reply"
+    )
 
 
 def _compute_cta_ratio(text: str, cta_patterns: list[str]) -> float:
@@ -328,6 +398,13 @@ def check(piece_id: str, platform: str, file_path: Path | str | None = None) -> 
     length_pass = length_max == 0 or text_length <= length_max
     cta_pass = cta_ratio <= cta_ratio_max
 
+    # B3 §2/§3/§4 algorithm-borrow rules (run on raw text, not stripped, so
+    # markdown links `[t](https://...)` and bare `https://...` both flag).
+    algo_violations: list[str] = []
+    x_first_tweet_violation = _check_x_first_tweet_no_https(canonical, raw_text)
+    if x_first_tweet_violation:
+        algo_violations.append(x_first_tweet_violation)
+
     result = CheckResult(
         piece_id=piece_id,
         platform=platform,
@@ -338,6 +415,7 @@ def check(piece_id: str, platform: str, file_path: Path | str | None = None) -> 
         cta_ratio_max=cta_ratio_max,
         cta_pass=cta_pass,
         disabled_hits=disabled_hits,
+        algo_rule_violations=algo_violations,
     )
 
     # Bug fix 2026-05-14: previous code wrote a single `voice_report.md`
@@ -393,6 +471,14 @@ def _render_report(r: CheckResult) -> str:
         f"## CTA Ratio: {'PASS' if r.cta_pass else 'FAIL'} "
         f"({pct:.1f}% / {limit_pct:.1f}% limit)"
     )
+    lines.append("")
+    algo_status = "PASS" if not r.algo_rule_violations else "FAIL"
+    lines.append(f"## Algorithm Rules: {algo_status} ({len(r.algo_rule_violations)} violations)")
+    if r.algo_rule_violations:
+        for v in r.algo_rule_violations:
+            lines.append(f"- {v}")
+    else:
+        lines.append("_none_")
     lines.append("")
     return "\n".join(lines) + "\n"
 
