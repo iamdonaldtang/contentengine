@@ -1,15 +1,17 @@
-# watch_deploy.ps1 · 引擎机常驻部署 watcher（第1档自动化 · 2026-06-03）
+# watch_deploy.ps1 - ENGINE HOST: resident deploy watcher (self-deploy tier).
 # ===========================================================================
-# 运行位置：⚙️ 引擎机（不是笔记本！）。文件本身在笔记本 git 仓里维护，随 reset 同步到引擎机，
-#           但**在引擎机上常驻运行**。
-# 作用：监听 runtime/admin_tasks/deploy.signal（由 Cowork 的 POST /admin/deploy 写入），
-#       一旦出现就跑 deploy_ingestion.ps1（fetch + reset --hard + rebuild + 冒烟），
-#       把结果写回 deploy.result 供 Cowork 的 GET /admin/deploy/status 读取。
-# 于是：🖥️笔记本 push → Cowork tk_deploy → ⚙️引擎机自动部署 → Cowork tk_deploy_status 看结果。
+# Runs on: ENGINE HOST (resident loop). Maintained in the laptop git repo and
+#       synced here via reset, but it RUNS on the engine host.
+# What: watch runtime/admin_tasks/deploy.signal (written by Cowork's
+#       POST /admin/deploy). On a signal, run deploy_ingestion.ps1
+#       (fetch + reset --hard + rebuild + smoke) and write deploy.result so
+#       Cowork's GET /admin/deploy/status can read the outcome.
+# Flow: LAPTOP push -> Cowork tk_deploy -> ENGINE HOST auto-deploy -> Cowork
+#       tk_deploy_wait.
 #
-# 启动（引擎机 · 二选一）：
-#   前台调试： powershell -ExecutionPolicy Bypass -File D:\engine-host\taskon\engine\scripts\watch_deploy.ps1
-#   常驻：     注册成 Task Scheduler 开机任务（见文件末尾命令），或塞进现有 watch_tunnel_health 巡检
+# Start (ENGINE HOST, pick one):
+#   foreground (debug): powershell -ExecutionPolicy Bypass -File D:\engine-host\taskon\engine\scripts\watch_deploy.ps1
+#   resident: register as a Task Scheduler at-startup task (see end of file)
 # ===========================================================================
 param(
   [string]$EngineDir = "D:\engine-host\taskon\engine",
@@ -20,15 +22,15 @@ $RuntimeTasks = Join-Path $EngineDir "runtime\admin_tasks"
 $Sig    = Join-Path $RuntimeTasks "deploy.signal"
 $Result = Join-Path $RuntimeTasks "deploy.result"
 
-Write-Host "[watch_deploy] 启动，监听 $Sig（每 ${PollSeconds}s）"
+Write-Host "[watch_deploy] started, watching $Sig (every ${PollSeconds}s)"
 while ($true) {
   if (Test-Path $Sig) {
     $ref = "origin/main"
     try { $ref = (Get-Content $Sig -Raw | ConvertFrom-Json).ref } catch {}
-    Remove-Item $Sig -Force -ErrorAction SilentlyContinue   # 先消费，避免重复触发
-    Write-Host "[watch_deploy] 收到部署信号 ref=$ref，开始 deploy_ingestion.ps1 ..."
+    Remove-Item $Sig -Force -ErrorAction SilentlyContinue   # consume first, avoid re-trigger
+    Write-Host "[watch_deploy] deploy signal ref=$ref, running deploy_ingestion.ps1 ..."
 
-    # 写一个 in-progress 结果，让 Cowork 轮询时能看到"进行中"
+    # write an in-progress result so a polling Cowork sees "running"
     (@{ ref=$ref; state="running"; started_at=(Get-Date).ToString("o") } | ConvertTo-Json) |
       Set-Content -Path $Result -Encoding UTF8
 
@@ -40,13 +42,13 @@ while ($true) {
     $tail = if ($log.Length -gt 3000) { $log.Substring($log.Length - 3000) } else { $log }
     (@{ ref=$ref; state="done"; exit=$code; ran_at=(Get-Date).ToString("o"); tail=$tail } | ConvertTo-Json -Depth 4) |
       Set-Content -Path $Result -Encoding UTF8
-    Write-Host "[watch_deploy] 完成 exit=$code"
+    Write-Host "[watch_deploy] done exit=$code"
   }
   Start-Sleep -Seconds $PollSeconds
 }
 
 # ---------------------------------------------------------------------------
-# ⚙️引擎机 一次性注册成开机常驻任务：
+# ENGINE HOST one-time: register as an at-startup resident task:
 #   $a = New-ScheduledTaskAction -Execute "powershell.exe" `
 #         -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File D:\engine-host\taskon\engine\scripts\watch_deploy.ps1"
 #   $t = New-ScheduledTaskTrigger -AtStartup

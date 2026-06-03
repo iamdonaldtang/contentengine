@@ -111,10 +111,10 @@ param(
     [string]$RemoteUser = 'donald',
     [string]$RemoteEngineDir = $(if ($env:REMOTE_ENGINE_DIR) { $env:REMOTE_ENGINE_DIR } else { 'D:/engine-host/taskon/engine' }),
 
-    # docker compose 服务名（不是容器显示名，也不是 Tailscale 主机名）。
-    # 2026-06-03 起 TaskOn/Pliven 共存，`docker compose config --services` 实测为
-    # taskon-engine（原 engine）。可用 -EngineService 或 $env:ENGINE_SERVICE 覆盖。
-    [string]$EngineService = $(if ($env:ENGINE_SERVICE) { $env:ENGINE_SERVICE } else { 'taskon-engine' }),
+    # docker compose service name (NOT container_name, NOT the tailscale host).
+    # Source of truth = origin docker-compose.yml: services engine/ingestion;
+    # container_name is taskon-*. Override with -EngineService or $env:ENGINE_SERVICE.
+    [string]$EngineService = $(if ($env:ENGINE_SERVICE) { $env:ENGINE_SERVICE } else { 'engine' }),
 
     [switch]$Local,
     [switch]$DryRun

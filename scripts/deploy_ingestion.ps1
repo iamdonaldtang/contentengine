@@ -1,61 +1,66 @@
-# deploy_ingestion.ps1 · ingestion 唯一部署入口（重建 + 强制冒烟闸门）
+# deploy_ingestion.ps1 - ENGINE HOST: the single deploy entry for ingestion.
 # ===========================================================================
-# 目的：把「拉代码 → 重建 → 端到端冒烟」焊成一条命令，让冒烟**不可能被跳过**。
-#       从此引擎机部署 ingestion 只跑这一条，**不要再裸 `docker compose up --build`**
-#       —— 裸跑会跳过冒烟，正是我们踩过的 COPY-CACHED 静默没生效 / 跑旧代码的坑。
+# Runs on: ENGINE HOST (D:\engine-host\taskon\engine).
+# What: hard-sync to origin, rebuild, then a MANDATORY end-to-end smoke gate.
+#       Always deploy with this; do NOT run a bare `docker compose up --build`
+#       (that skips the smoke and was the source of silent "stale image" bugs).
 #
-# 用法（引擎机 D:\engine-host\taskon\engine）：
+# Discipline: the engine host is a pure mirror of origin. Never edit locally,
+#       never commit locally. Deploy = `git reset --hard origin/main`.
+#       .env / runtime/ / scripts/.tk_token are gitignored, untouched by reset.
+#
+# Usage (ENGINE HOST):
 #   .\scripts\deploy_ingestion.ps1
-#   .\scripts\deploy_ingestion.ps1 -EngineBase http://engine:5051   # 走内网代替公网
+#   .\scripts\deploy_ingestion.ps1 -EngineBase http://engine:5051
 #
-# 退出码：0 = 部署且冒烟全过；非0 = 任一闸门失败，视为部署未通过，需排查。
+# Exit code: 0 = deployed + smoke green; non-zero = a gate failed (treat as
+#       deploy NOT done).
 # ===========================================================================
 [CmdletBinding()]
 param(
   [string]$EngineBase = "https://ingest.taskon.xyz",
   [string]$Ref = "origin/main",
-  # docker compose 服务名（非容器显示名）。以 origin compose 为准：服务名 `ingestion`
-  # （container_name 才是 taskon-ingestion）。Pliven 用本脚本副本时按 Pliven compose 的服务名传 -Service。
+  # docker compose service name (NOT the container_name, NOT the tailscale host).
+  # Source of truth = origin docker-compose.yml: services are engine/ingestion;
+  # container_name is taskon-*. Pliven copies pass their own -Service.
   [string]$Service = "ingestion"
 )
 $ErrorActionPreference = "Stop"
-Set-Location "$PSScriptRoot\.."   # 切到 engine 仓根
+Set-Location "$PSScriptRoot\.."   # engine repo root
 
-Write-Host "== 1/5 硬同步到 $Ref（引擎机=origin 镜像，杜绝本地漂移）=="
-# 铁律：引擎机永不本地改、永不本地 commit。部署=hard reset 到 origin，保证字节一致。
-# .env / runtime/ / scripts/.tk_token 均 gitignored，reset --hard 不会动它们。
+Write-Host "== 1/5 hard-sync to $Ref (engine host = origin mirror) =="
 git fetch origin
 git reset --hard $Ref
 
-Write-Host "== 2/5 重建 ingestion 容器 =="
+Write-Host "== 2/5 rebuild ingestion container =="
 docker compose up -d --build $Service
 
-Write-Host "== 3/5 等待并探一眼容器内代码 =="
+Write-Host "== 3/5 peek code inside the container =="
 Start-Sleep -Seconds 4
 try {
   $probe = docker compose exec -T $Service python -c "import ingestion.admin_routes as a; print('NEW' if hasattr(a,'admin_upload_asset') else 'OLD')" 2>$null
-  Write-Host "  容器 admin_routes: $probe（仅参考；最终以冒烟为准）"
-} catch { Write-Host "  （容器内探测跳过）" }
+  Write-Host "  container admin_routes: $probe (informational; smoke is the gate)"
+} catch { Write-Host "  (in-container probe skipped)" }
 
-Write-Host "== 4/5 端到端冒烟（强制闸门）=="
+Write-Host "== 4/5 end-to-end smoke (mandatory gate) =="
 $tokenLine = Select-String -Path .env -Pattern '^ADMIN_API_TOKEN=' | Select-Object -First 1
-if (-not $tokenLine) { Write-Error ".env 缺 ADMIN_API_TOKEN，无法冒烟"; exit 1 }
+if (-not $tokenLine) { Write-Error ".env missing ADMIN_API_TOKEN, cannot smoke"; exit 1 }
 $token = ($tokenLine.Line -replace '^ADMIN_API_TOKEN=', '').Trim()
 
 $bash = Join-Path $env:ProgramFiles "Git\bin\bash.exe"
-if (-not (Test-Path $bash)) { $bash = "bash" }   # 退回 PATH 上的 bash（git-bash / wsl）
+if (-not (Test-Path $bash)) { $bash = "bash" }   # fall back to bash on PATH
 
 $env:ADMIN_API_TOKEN = $token
 $env:ENGINE_BASE = $EngineBase
 & $bash "scripts/smoke_httpfirst.sh"
 $code = $LASTEXITCODE
-$env:ADMIN_API_TOKEN = $null   # 跑完即清，不留在会话环境里
+$env:ADMIN_API_TOKEN = $null   # clear after run
 
-Write-Host "== 5/5 结果 =="
+Write-Host "== 5/5 result =="
 if ($code -ne 0) {
-  Write-Host "🔴 冒烟失败 (exit=$code) —— 部署视为未通过。" -ForegroundColor Red
-  Write-Host "   排查：看上面 ✗ 行；多半是容器跑旧代码 / token 失效 / 某 job 挂。" -ForegroundColor Red
-  Write-Host "   参考 docs/HTTP-first_方案A_部署与13步映射_v1.md §5.5(四层防线) + §8(部署链坑)。" -ForegroundColor Red
+  Write-Host "SMOKE FAILED (exit=$code) - deploy NOT considered done." -ForegroundColor Red
+  Write-Host "  Triage: see the failing lines above; likely stale image / bad token / a job failed." -ForegroundColor Red
+  Write-Host "  Ref: docs/HTTP-first_FangAnA_*.md sec 5.5 + the checklist T5/W1/R1." -ForegroundColor Red
   exit $code
 }
-Write-Host "🟢 部署 + 冒烟全过，ingestion 上线确认。" -ForegroundColor Green
+Write-Host "Deploy + smoke green. ingestion is live." -ForegroundColor Green
