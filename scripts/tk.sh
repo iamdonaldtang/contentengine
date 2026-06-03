@@ -94,8 +94,21 @@ tk_job() {
 }
 # 步 3 · 4 平台改写 + voice：     tk_adapt <piece>
 tk_adapt()   { tk_job adapter_orchestrator "{\"piece_id\":\"$1\"}"; }
-# 步 4 · 单平台 voice 复检：       tk_voice <piece> <platform>
-tk_voice()   { tk_job voice_checker "{\"piece_id\":\"$1\",\"platform\":\"$2\"}"; }
+# 步 4 · 单平台 voice 复检：       tk_voice <piece> <platform> [file]
+#   file 省略时按 platform 自动映射 adapter 实际文件名（T2 修复 2026-06-03）
+tk_voice() {
+  local piece="$1" platform="$2" file="$3"
+  if [ -z "$file" ]; then
+    case "$platform" in
+      blog)              file=medium_long.md;;
+      linkedin_post)     file=linkedin_post.md;;
+      linkedin_carousel) file=carousel_10pages.md;;
+      yt_shorts)         file=shorts_60s.md;;
+      x_thread)          file=xthread_final.md;;
+    esac
+  fi
+  tk_job voice_checker "{\"piece_id\":\"$piece\",\"platform\":\"$platform\",\"file\":\"$file\"}"
+}
 # 步 7 · 短视频渲染（异步）：      tk_video <piece> [voice]
 tk_video()   { tk_job mpt_runner "{\"piece_id\":\"$1\",\"voice\":\"${2:-zh-CN-YunxiNeural-Male}\"}"; }
 # 步 8 · UTM 短链：                tk_utm <piece> <target_url(https://taskon.xyz/...)> <hook_type>

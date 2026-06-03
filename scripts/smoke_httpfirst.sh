@@ -30,6 +30,12 @@ echo "== smoke @ $B  piece=$P =="
 # 0 公网/内网健康
 ck "health 200" 200 "$(code "$B/health")"
 ck "admin auth 401(无token)" 401 "$(code -X POST "$B/admin/jobs/adapter_orchestrator")"
+# postiz 健康必须 ok:2xx —— 真发拦路（key/鉴权坏）的提前预警（T5 教训：ok:401 曾被忽略）
+PHEALTH=$(curl -s -m15 "${H[@]}" "$B/admin/health/all" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("postiz",""))' 2>/dev/null)
+case "$PHEALTH" in
+  ok:2*) PASS=$((PASS+1)); echo "  ✓ postiz health ($PHEALTH)";;
+  *)     FAIL=$((FAIL+1)); echo "  ✗ postiz health 非 ok:2xx ($PHEALTH) — 真发会挡，见 T5";;
+esac
 
 # 1 文件契约：写选题卡 + 正稿
 SC=$'id: '"$P"$'\ntitle_hypothesis: smoke\nhook_type: smoke\n'

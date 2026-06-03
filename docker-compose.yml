@@ -135,6 +135,9 @@ services:
       - ./lib:/app/lib
       - ./sources:/app/sources
       - ./jobs:/app/jobs
+      # scripts/ 是 admin run_publish 的 publish_immediate 所需（2026-06-03 T4 修复）。
+      # 之前没挂导致 `python -m scripts.publish_immediate` ModuleNotFoundError。
+      - ./scripts:/app/scripts
 
     # Local-only port mapping; production traffic comes via Cloudflare Tunnel
     # which dials the container hostname directly on the docker network.

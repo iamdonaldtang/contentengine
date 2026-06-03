@@ -160,6 +160,19 @@ def test_job_argv_no_shell_injection(client: Any) -> None:
     assert argv == ["python", "-m", "jobs.schedule_planner", "--piece-id", "P-01", "--dry-run"]
 
 
+def test_job_argv_voice_checker_file(client: Any) -> None:
+    """T2: voice_checker 支持显式 file，覆盖 <platform>_final.md 自动解析。"""
+    import ingestion.admin_routes as ar
+    argv = ar._job_argv("voice_checker", {"piece_id": "P-01", "platform": "blog", "file": "medium_long.md"})
+    assert argv[:6] == ["python", "-m", "jobs.voice_checker", "--piece-id", "P-01", "--platform"]
+    assert "--file" in argv and argv[-1].endswith("/P-01/medium_long.md")
+    # 没传 file 时不带 --file（保持向后兼容）
+    argv2 = ar._job_argv("voice_checker", {"piece_id": "P-01", "platform": "blog"})
+    assert "--file" not in argv2
+    # 路径穿越的 file 被拒
+    assert ar._job_argv("voice_checker", {"piece_id": "P-01", "platform": "blog", "file": "../etc/passwd"}) is None
+
+
 # --------------------------------------------------------------------------- #
 # pieces: state / select / kill
 # --------------------------------------------------------------------------- #

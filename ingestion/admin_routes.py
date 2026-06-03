@@ -376,9 +376,9 @@ def admin_health_all() -> tuple[Response, int]:
     else:
         try:
             r = requests.get(
-                f"{postiz_url}/api/public/v1/posts",
-                # Postiz 自托管公网 API 要**裸 key**，加 Bearer 前缀会 401（2026-06-03 实测）。
-                # 与 sources/postiz.py 的 _headers() 一致。
+                # /integrations 用裸 key 返 200（/posts 缺查询参数会 400，虽 <500 算 ok 但不干净）。
+                # 裸 key：Postiz 自托管要裸 key，加 Bearer 会 401（2026-06-03 实测），与 sources/postiz.py 一致。
+                f"{postiz_url}/api/public/v1/integrations",
                 headers={"Authorization": postiz_key},
                 timeout=5,
             )
@@ -660,7 +660,16 @@ def _job_argv(job: str, payload: dict[str, Any]) -> list[str] | None:
         platform = (payload.get("platform") or "").strip()
         if not _PLATFORM_KEY_RE.match(platform):
             return None
-        return ["python", "-m", "jobs.voice_checker", "--piece-id", pid, "--platform", platform]
+        argv = ["python", "-m", "jobs.voice_checker", "--piece-id", pid, "--platform", platform]
+        # 可选 file：覆盖 voice_checker 的 <platform>_final.md 自动解析（T2 修复 2026-06-03）。
+        # adapter 写的是 medium_long.md / carousel_10pages.md / shorts_60s.md 等，名字对不上，
+        # 改稿后独立复检必须显式传 file。
+        fname = (payload.get("file") or "").strip()
+        if fname:
+            if not _FILENAME_RE.match(fname) or fname.startswith("."):
+                return None
+            argv += ["--file", str(_DRAFTS_ROOT / pid / fname)]
+        return argv
 
     if job == "custom_slice_generator":
         if not pid_ok:
