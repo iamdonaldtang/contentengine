@@ -153,4 +153,23 @@ tk_wait() {
   done
 }
 
-echo "tk.sh loaded · ENGINE_BASE=$ENGINE_BASE · 函数: tk_health tk_hot tk_write tk_read tk_ls tk_select tk_adapt tk_voice tk_video tk_utm tk_slice tk_dryrun tk_schedule tk_publish tk_state tk_kill tk_logdm tk_job tk_poll tk_wait"
+# --- 自助部署（第1档）：tk_deploy 触发引擎机自部署，tk_deploy_status 看结果 ----------
+# 前提：🖥️笔记本已 push 到 origin；⚙️引擎机的 watch_deploy.ps1 在常驻。
+tk_deploy()        { _tk_req POST "$ENGINE_BASE/admin/deploy" -H "Content-Type: application/json" -d "{\"ref\":\"${1:-origin/main}\"}"; echo; }
+tk_deploy_status() { _tk_req GET "$ENGINE_BASE/admin/deploy/status"; echo; }
+# 阻塞等部署跑完（最多 ~180s）：tk_deploy_wait
+tk_deploy_wait() {
+  local max="${1:-180}" waited=0 s
+  while :; do
+    s="$(_tk_req GET "$ENGINE_BASE/admin/deploy/status" 2>/dev/null | python3 -c 'import sys,json
+try:
+ d=json.load(sys.stdin); r=d.get("last_result") or {}; print(("PENDING" if d.get("pending") else r.get("state","?"))+":"+str(r.get("exit","")))
+except Exception: print("?")' 2>/dev/null)"
+    echo "  deploy: $s (${waited}s)"
+    case "$s" in done:0) return 0;; done:*) return 1;; esac
+    [ "$waited" -ge "$max" ] && { echo "  ✗ 超时"; return 1; }
+    sleep 5; waited=$((waited+5))
+  done
+}
+
+echo "tk.sh loaded · ENGINE_BASE=$ENGINE_BASE · 函数: tk_health tk_hot tk_write tk_read tk_ls tk_select tk_adapt tk_voice tk_video tk_utm tk_slice tk_dryrun tk_schedule tk_publish tk_state tk_kill tk_logdm tk_job tk_poll tk_wait tk_deploy tk_deploy_status tk_deploy_wait"

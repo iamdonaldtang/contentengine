@@ -945,3 +945,55 @@ def admin_get_asset(piece_id: str, filename: str) -> Any:
         return _err(404, "not_found", f"{filename} not found in {piece_id}")
     from flask import send_file
     return send_file(str(p))
+
+
+# --------------------------------------------------------------------------- #
+# 自助部署（第1档自动化 · 2026-06-03）
+# Cowork 没法直跑引擎机 PowerShell/git/docker，所以走 sentinel 模式（同 restart_signal）：
+#   POST /admin/deploy        → 写 runtime/admin_tasks/deploy.signal
+#   引擎机常驻 watch_deploy.ps1 → 看到 signal 就跑 deploy_ingestion.ps1（fetch+reset--hard+rebuild+冒烟）
+#   GET  /admin/deploy/status → 读 deploy.result（watcher 写回的结果）
+# 流程：笔记本 push → Cowork tk_deploy → 引擎机自部署 → Cowork tk_deploy_status 看结果。
+# --------------------------------------------------------------------------- #
+
+_DEPLOY_REF_RE = re.compile(r"^[A-Za-z0-9_./-]{1,64}$")
+
+
+@admin_bp.post("/deploy")
+def admin_deploy() -> tuple[Response, int]:
+    """写部署 sentinel，让引擎机 host watcher 跑 deploy_ingestion.ps1。"""
+    err = _require_auth()
+    if err:
+        return err
+    payload = request.get_json(silent=True) or {}
+    ref = (payload.get("ref") or "origin/main").strip()
+    if not _DEPLOY_REF_RE.match(ref):
+        return _err(400, "bad_ref", "ref must match [A-Za-z0-9_./-]{1,64}")
+    sig = ADMIN_TASK_DIR / "deploy.signal"
+    sig.write_text(
+        json.dumps({"ref": ref, "requested_at": _utc_now_iso()}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    logger.warning("admin deploy signal written ref=%s file=%s", ref, sig)
+    return jsonify({
+        "status": "signal_written", "ref": ref,
+        "note": "engine host watch_deploy.ps1 须在跑；轮询 /admin/deploy/status 看结果",
+        "status_url": "/admin/deploy/status",
+    }), 202
+
+
+@admin_bp.get("/deploy/status")
+def admin_deploy_status() -> tuple[Response, int]:
+    """读 watcher 写回的最近一次部署结果 + 是否还有未消费的 signal。"""
+    err = _require_auth()
+    if err:
+        return err
+    sig = ADMIN_TASK_DIR / "deploy.signal"
+    res = ADMIN_TASK_DIR / "deploy.result"
+    out: dict[str, Any] = {"pending": sig.exists()}
+    if res.exists():
+        try:
+            out["last_result"] = json.loads(res.read_text(encoding="utf-8"))
+        except Exception:
+            out["last_result"] = {"raw": res.read_text(encoding="utf-8")[-4000:]}
+    return jsonify(out), 200

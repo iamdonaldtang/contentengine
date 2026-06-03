@@ -14,17 +14,18 @@
 param(
   [string]$EngineBase = "https://ingest.taskon.xyz",
   [string]$Ref = "origin/main",
-  # docker compose 服务名（非容器显示名）。2026-06-03 起 TaskOn/Pliven 共存，
-  # `docker compose config --services` 实测为 taskon-ingestion（原 ingestion）。
-  # Pliven 用本脚本副本时改成 pliven-ingestion。
-  [string]$Service = "taskon-ingestion"
+  # docker compose 服务名（非容器显示名）。以 origin compose 为准：服务名 `ingestion`
+  # （container_name 才是 taskon-ingestion）。Pliven 用本脚本副本时按 Pliven compose 的服务名传 -Service。
+  [string]$Service = "ingestion"
 )
 $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."   # 切到 engine 仓根
 
-Write-Host "== 1/5 拉取最新代码 ($Ref) =="
+Write-Host "== 1/5 硬同步到 $Ref（引擎机=origin 镜像，杜绝本地漂移）=="
+# 铁律：引擎机永不本地改、永不本地 commit。部署=hard reset 到 origin，保证字节一致。
+# .env / runtime/ / scripts/.tk_token 均 gitignored，reset --hard 不会动它们。
 git fetch origin
-git checkout $Ref -- ingestion/    # 取 ingestion 全量（admin_routes / app / media_routes ...）
+git reset --hard $Ref
 
 Write-Host "== 2/5 重建 ingestion 容器 =="
 docker compose up -d --build $Service
