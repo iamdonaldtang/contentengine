@@ -60,8 +60,12 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 # --------------------------------------------------------------------------- #
 
 ADMIN_TOKEN_ENV = "ADMIN_API_TOKEN"
-ADMIN_TASK_DIR = Path("/app/runtime/admin_tasks")
-ADMIN_TASK_DIR.mkdir(parents=True, exist_ok=True)
+ADMIN_TASK_DIR = Path(os.environ.get("ADMIN_TASK_DIR") or "/app/runtime/admin_tasks")
+try:
+    ADMIN_TASK_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    # 容器外（CI / 本地 pytest）/app 不可写时不致命；运行期真写 task 文件若失败另有清晰日志。
+    pass
 
 # 15 min subprocess hard timeout — publish_immediate 包 mpt_runner 最坏 ~5min
 _SUBPROC_TIMEOUT_S = 15 * 60
