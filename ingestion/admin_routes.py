@@ -860,3 +860,73 @@ def admin_kill_piece(piece_id: str) -> tuple[Response, int]:
             logger.exception("admin kill: rmtree failed piece=%s", piece_id)
     logger.warning("admin kill piece=%s dir_removed=%s", piece_id, dir_removed)
     return jsonify({"status": "killed", "piece_id": piece_id, "dir_removed": dir_removed}), 200
+
+
+# --------------------------------------------------------------------------- #
+# 步骤 6 配图 · 二进制资产上传/读取（phase2 · 2026-06-03）
+# Cowork 生成的 AI 配图（png/jpg/webp/gif）经此送进引擎，落在 drafts/<piece>/<file>
+# （与 shorts_60s.mp4 同级，便于已有签名媒体路由 /api/media 对 Postiz 暴露）。
+# 上传体可达 app MAX_CONTENT_LENGTH（已提到 16 MiB）。魔数校验防把任意二进制冒充图片。
+# --------------------------------------------------------------------------- #
+
+_ASSET_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _looks_like_image(suffix: str, data: bytes) -> bool:
+    """轻量魔数校验：确认 body 确实是声明的图片类型。"""
+    if suffix == ".webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    sigs = {
+        ".png": (b"\x89PNG\r\n\x1a\n",),
+        ".jpg": (b"\xff\xd8\xff",),
+        ".jpeg": (b"\xff\xd8\xff",),
+        ".gif": (b"GIF87a", b"GIF89a"),
+    }
+    pats = sigs.get(suffix)
+    return bool(pats) and any(data.startswith(p) for p in pats)
+
+
+def _safe_asset_file(piece_id: str, filename: str) -> Path | None:
+    """drafts/<piece>/<filename> 安全解析 + 图片扩展名白名单。"""
+    p = _safe_draft_file(piece_id, filename)
+    if p is None or p.suffix.lower() not in _ASSET_SUFFIXES:
+        return None
+    return p
+
+
+@admin_bp.post("/assets/<piece_id>/<filename>")
+def admin_upload_asset(piece_id: str, filename: str) -> tuple[Response, int]:
+    """上传一张配图到 drafts/<piece_id>/<filename>（png/jpg/jpeg/webp/gif）。"""
+    err = _require_auth()
+    if err:
+        return err
+    p = _safe_asset_file(piece_id, filename)
+    if p is None:
+        return _err(400, "bad_path",
+                    f"invalid piece_id/filename or suffix (allowed: {sorted(_ASSET_SUFFIXES)})")
+    data = request.get_data(cache=False)
+    if not data:
+        return _err(400, "empty_body", "request body is empty")
+    if not _looks_like_image(p.suffix.lower(), data):
+        return _err(400, "not_an_image", "body does not match PNG/JPEG/WebP/GIF signature")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    logger.info("admin asset uploaded piece=%s file=%s bytes=%d", piece_id, filename, len(data))
+    return jsonify({
+        "status": "written", "piece_id": piece_id, "file": filename, "bytes": len(data),
+    }), 201
+
+
+@admin_bp.get("/assets/<piece_id>/<filename>")
+def admin_get_asset(piece_id: str, filename: str) -> Any:
+    """Bearer 读回配图（验证用）。Postiz 公网取图走 /api/media 签名 URL。"""
+    err = _require_auth()
+    if err:
+        return err
+    p = _safe_asset_file(piece_id, filename)
+    if p is None:
+        return _err(400, "bad_path", "invalid piece_id/filename or suffix")
+    if not p.exists():
+        return _err(404, "not_found", f"{filename} not found in {piece_id}")
+    from flask import send_file
+    return send_file(str(p))

@@ -20,7 +20,13 @@
 
 _tk_need_token() {
   if [ -z "${ADMIN_API_TOKEN:-}" ]; then
-    echo "✗ 先 export ADMIN_API_TOKEN='<token>'（引擎机 .env 里的 ADMIN_API_TOKEN）" >&2
+    # 没有 env 就从本地 token 文件读（一次性放好，已 gitignore）。
+    # 优先级：$ADMIN_API_TOKEN env → $TASKON_TOKEN_FILE → <tk.sh同目录>/.tk_token
+    local tf="${TASKON_TOKEN_FILE:-$(dirname "${BASH_SOURCE[0]}")/.tk_token}"
+    [ -f "$tf" ] && ADMIN_API_TOKEN="$(tr -d '\r\n' < "$tf")"
+  fi
+  if [ -z "${ADMIN_API_TOKEN:-}" ]; then
+    echo "✗ 没拿到 token：export ADMIN_API_TOKEN=... 或把 token 写进 $(dirname "${BASH_SOURCE[0]}")/.tk_token（已 gitignore，绝不入库）" >&2
     return 2
   fi
 }
@@ -64,6 +70,14 @@ tk_write() {
 tk_read() { _tk_req GET "$ENGINE_BASE/admin/drafts/$1/$2"; }
 # 列 piece 文件 + state：tk_ls <piece>
 tk_ls()   { _tk_req GET "$ENGINE_BASE/admin/drafts/$1"; echo; }
+
+# --- 步骤 6 · 配图上传（phase2）：tk_img <piece> <文件名.png> <本地路径> --------
+#   例：tk_img 20260603-01 x_main.png ./x_main.png
+tk_img() {
+  local piece="$1" file="$2" path="$3"
+  [ -f "$path" ] || { echo "✗ 文件不存在: $path" >&2; return 1; }
+  _tk_req POST "$ENGINE_BASE/admin/assets/$piece/$file" --data-binary "@$path"; echo
+}
 
 # --- 步骤 1.2 · 校验选题卡 → 置 selected（validate_selection 等价） -------
 tk_select() {

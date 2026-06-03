@@ -1,5 +1,9 @@
 # 本系统 ↔ Cowork 协作模型 · v2.0
 
+> ⚠️ **2026-06-03 更新 · Cowork 侧改走 HTTP-first（方案A）**
+> 本文档的「4 姿势远程版」假设 Cowork 能 SMB 写 `Z:` + Tailscale SSH 跳转，**实测在 Cowork sandbox 里三样（网络盘 / Tailscale / PowerShell）全不可达**。Cowork 实际只有两条通道：① 本地挂载盘 ② 公网 HTTPS。
+> **Cowork 与引擎的协作现以公网 admin 端点（`https://ingest.taskon.xyz/admin/*`）+ `scripts/tk.sh` 为准**，详见 [`HTTP-first_方案A_部署与13步映射_v1.md`](HTTP-first_方案A_部署与13步映射_v1.md)。本文档的 SMB/SSH 姿势仅适用于真实 Windows shell 手动驱动场景。
+
 > **本版本对应迁移**：2026-06-02 引擎搬到独立笔记本（Tailscale 主机 `engine` · 100.77.191.62），主笔记本 Cowork 通过 Tailscale + Cloudflare Tunnel 远程调用。
 >
 > **跟 v1.1 的根本区别**：v1.1 假设 engine docker 跑在主笔记本本地，所有接触面（文件系统 / SQLite / docker exec）走 localhost；v2.0 把 engine 全部物理迁到引擎机，主笔记本只跑 Cowork 客户端 ——所有交互必须经过网络（HTTP + SSH + SMB）。

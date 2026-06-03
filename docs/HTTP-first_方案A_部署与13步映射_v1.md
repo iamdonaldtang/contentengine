@@ -68,7 +68,7 @@ source <挂载路径>/Taskon/marketing/engine/scripts/tk.sh
 | 4 | 审稿 | `tk_read <p> xthread_final.md` / `tk_ls <p>` | `GET /admin/drafts/..` |
 | 4* | voice 复检 | `tk_voice <p> linkedin_post` | `POST /admin/jobs/voice_checker` |
 | 5 | 数据关 过 / 砍 | `tk_state <p> reviewed` / `tk_kill <p>` | `POST /admin/pieces/<p>/state` / `/kill` |
-| 6 | 配图 | **phase2**（图片二进制上传端点未做） | — |
+| 6 | 配图 | `tk_img <p> x_main.png ./x_main.png` | `POST /admin/assets/<p>/<file>`（png/jpg/webp/gif，魔数校验） |
 | 7 | 短视频 | `tk_video <p>` → `tk_poll <task_id>` | `POST /admin/jobs/mpt_runner` |
 | 8 | UTM 短链 | `tk_utm <p> https://taskon.xyz/<lp> <hook>` → `tk_read <p> utm_links.json` | `POST /admin/jobs/utm_generator` |
 | 9 | YT 元数据 | `tk_write <p> yt_metadata.yaml ./yt.yaml` | `POST /admin/drafts/<p>/yt_metadata.yaml` |
@@ -93,7 +93,7 @@ source <挂载路径>/Taskon/marketing/engine/scripts/tk.sh
 
 ## 5 · 已知边界 / phase2
 
-- **步骤 6 配图上传未做**：需要二进制 multipart 端点（`.png/.jpg` → `drafts/<piece>/assets/`）+ 把 `MAX_CONTENT_LENGTH`（当前 1 MiB）调大。要做喊一声。
+- ~~步骤 6 配图上传未做~~ **（2026-06-03 已补 phase2）**：`POST /admin/assets/<piece>/<file>` 收 png/jpg/jpeg/webp/gif（魔数校验，落 `drafts/<piece>/<file>` 与 mp4 同级），`MAX_CONTENT_LENGTH` 1→16 MiB，`media_routes` 签名 URL 已加图片后缀供 Postiz 拉取。Cowork 用 `tk_img`。
 - **Cowork sandbox 文件视图滞后**：Edit/Write 工具写的是规范文件（Windows 侧），但 Cowork bash 看到的是会话启动时的快照，**bash 看不到本会话内 Edit 的改动**。所以本方案的引擎代码自测是用"快照原文 + 重建补丁"在 /tmp 里跑的；真部署以 Windows 侧规范文件为准。
 - **`pieces.state` 无 `killed` 枚举**：手册步 5 的"砍"用 `tk_kill`（硬删 + 级联）实现，不是改 state。
 

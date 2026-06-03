@@ -3,6 +3,8 @@
 .env.local
 .env.production
 .env.bak.*
+.tk_token
+scripts/.tk_token
 
 # ---- Local Claude Code config ----
 .claude/

@@ -46,7 +46,12 @@ media_bp = Blueprint("media_routes", __name__)
 # Constants
 # --------------------------------------------------------------------------- #
 
-_ALLOWED_SUFFIXES = {".mp4": "video/mp4", ".mp3": "audio/mpeg"}
+_ALLOWED_SUFFIXES = {
+    ".mp4": "video/mp4", ".mp3": "audio/mpeg",
+    # 配图 phase2（2026-06-03）：让 Postiz 发布时能通过签名 URL 拉取图片
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+}
 _DRAFTS_DIR_ENV = "DRAFTS_DIR"
 _DEFAULT_DRAFTS_DIR = "/app/runtime/drafts"
 

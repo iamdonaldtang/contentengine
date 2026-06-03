@@ -113,7 +113,7 @@ LISTMONK_HMAC_SECRET_ENV = "LISTMONK_WEBHOOK_SECRET"
 
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 1 << 20  # 1 MiB request cap
+app.config["MAX_CONTENT_LENGTH"] = 16 << 20  # 16 MiB（配图上传 phase2；文本端点远小于此）
 
 # ----------------------------------------------------------------------- #
 # CORS · landing page JS (https://taskon.xyz) POSTs to ingest.taskon.xyz.
