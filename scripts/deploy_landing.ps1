@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 TaskOn Landing Pages · 部署助手（打包 + 校验 + 可选自动上传）
 
