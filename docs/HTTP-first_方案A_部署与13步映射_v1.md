@@ -99,6 +99,19 @@ source <挂载路径>/Taskon/marketing/engine/scripts/tk.sh
 
 ---
 
+## 5.5 · 监控与「规避改坏」（四层防线）
+
+整条链路能走 HTTP-first，靠四层防线保住，别再让"改一处把全流程静默改坏"重演：
+
+1. **部署闸门（每次重建后必跑）**：`bash scripts/smoke_httpfirst.sh` —— 真实跑一遍 piece 生命周期 + 配图往返 + dry-run job + kill 清理，13 项全绿才算部署成功。我们踩过 `COPY ingestion/ CACHED` 导致镜像静默没更新的坑，冒烟会直接抓到（端点 404 / 字节不一致）。
+2. **持续探活（每日定时）**：Cowork scheduled task 每天跑一次同一冒烟，路由消失 / 鉴权坏 / job 挂会当天暴露，不必等下次发版才发现。
+3. **改前回归（CI/本地）**：把端点断言固化成 `tests/test_admin_pipeline.py`（auth / 路径穿越 / 文件契约 / job 校验 / state·select·kill 级联 / 配图魔数），随 CI 跑 —— 任何改动破坏端点会在合并前红。
+4. **部署 SOP 闸门**：引擎机 `git fetch → git checkout origin/main -- <files> → git grep -c <新符号> (必须≥1) → docker compose up -d --build → docker compose exec ingestion python -c "import ingestion.admin_routes as a; assert hasattr(a,'<新函数>')" → 冒烟`。中间每个 grep/exec 闸门都卡住"代码没真正进容器"这一类失败（我们连踩三次：没 push / 没 fetch / COPY 缓存）。
+
+> 经验：这条链路最隐蔽的故障不是"报错"，而是**静默没生效**（容器还跑旧代码、探针 200 但行为是旧的）。所以监控的核心是**行为级冒烟**（真发请求看响应），而不是只看容器 healthy。
+
+---
+
 ## 6 · 为什么不再用方案 B（笔记本守护进程）
 
 方案 B 要在主笔记本常驻一个 FileSystemWatcher + 跑 run_remote.ps1，和 v3 红线"主笔记本只跑 Cowork"冲突，且多一个易挂的移动部件。方案 A 把引擎做成自洽后端，Cowork 纯 HTTP 客户端，符合 v3 架构方向，也彻底干掉了 Z: 这一跳和 5 分钟轮询。
