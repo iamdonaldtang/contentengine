@@ -1,0 +1,129 @@
+# tk.sh · TaskOn 内容流水线 · Cowork HTTP-first 助手库（方案A · 2026-06-03）
+# ===========================================================================
+# 背景：Cowork sandbox 物理上写不了 Z:（网络盘）、连不到 Tailscale 引擎机、
+#       跑不了 PowerShell/run_remote.ps1。唯一能用的两条通道是 ① 本地挂载盘
+#       ② 公网 HTTPS。本助手把全流程操作手册 v3 的 13 步全部映射到引擎
+#       ingestion 服务的公网 admin 端点（ingest.taskon.xyz），Cowork 只 curl，
+#       端到端即时、无 5 分钟轮询、永不碰 Z:/SSH。
+#
+# 用法：
+#   在 Cowork bash 里：
+#     export ADMIN_API_TOKEN='<引擎机 .env 里的 ADMIN_API_TOKEN>'
+#     source /sessions/<...>/mnt/Taskon/marketing/engine/scripts/tk.sh
+#   然后按 13 步调函数（见每个函数头注释里的 “步骤N”）。
+#
+# 约定：piece_id 形如 20260603-01。所有写文件函数发原始 body；
+#       所有 job/state 函数发 JSON。出错时 curl -f 让非 2xx 直接报错退出。
+# ===========================================================================
+
+: "${ENGINE_BASE:=https://ingest.taskon.xyz}"
+
+_tk_need_token() {
+  if [ -z "${ADMIN_API_TOKEN:-}" ]; then
+    echo "✗ 先 export ADMIN_API_TOKEN='<token>'（引擎机 .env 里的 ADMIN_API_TOKEN）" >&2
+    return 2
+  fi
+}
+_tk_auth()  { _tk_need_token || return 2; printf 'Authorization: Bearer %s' "$ADMIN_API_TOKEN"; }
+# 带鉴权的 curl；$1=method 其余透传
+_tk_req() {
+  _tk_need_token || return 2
+  local method="$1"; shift
+  curl -fsS -X "$method" -H "Authorization: Bearer $ADMIN_API_TOKEN" "$@"
+}
+
+# --- 步骤 0 · 入场检查 -----------------------------------------------------
+tk_health() {
+  echo "# public /health"; curl -fsS "$ENGINE_BASE/health"; echo
+  echo "# /admin/health/all"; _tk_req GET "$ENGINE_BASE/admin/health/all"; echo
+}
+
+# --- 步骤 1.1 · 写 hot_topics（runtime 根） --------------------------------
+# tk_hot <filename.json> <本地文件路径>
+#   例：tk_hot hot_topics_20260602.json ./hot_topics_20260602.json
+tk_hot() {
+  local name="$1" path="$2"
+  [ -f "$path" ] || { echo "✗ 文件不存在: $path" >&2; return 1; }
+  _tk_req POST "$ENGINE_BASE/admin/runtime-file/$name" \
+    --data-binary "@$path"; echo
+}
+
+# --- 步骤 1.2 / 2 / 6(yaml) / 9 · 写草稿到 drafts/<piece>/ ----------------
+# tk_write <piece> <filename> <本地文件路径>
+#   例：tk_write 20260603-01 selection_card.yaml ./sc.yaml
+#       tk_write 20260603-01 xthread_final.md ./xthread.md
+#       tk_write 20260603-01 yt_metadata.yaml ./yt.yaml
+tk_write() {
+  local piece="$1" file="$2" path="$3"
+  [ -f "$path" ] || { echo "✗ 文件不存在: $path" >&2; return 1; }
+  _tk_req POST "$ENGINE_BASE/admin/drafts/$piece/$file" \
+    --data-binary "@$path"; echo
+}
+
+# 读草稿（步 3/4/5/8/11 看 engine 产物）：tk_read <piece> <file>
+tk_read() { _tk_req GET "$ENGINE_BASE/admin/drafts/$1/$2"; }
+# 列 piece 文件 + state：tk_ls <piece>
+tk_ls()   { _tk_req GET "$ENGINE_BASE/admin/drafts/$1"; echo; }
+
+# --- 步骤 1.2 · 校验选题卡 → 置 selected（validate_selection 等价） -------
+tk_select() {
+  _tk_req POST "$ENGINE_BASE/admin/pieces/$1/select" \
+    -H "Content-Type: application/json" -d '{}'; echo
+}
+
+# --- 通用 job 触发（异步，返回 task_id）-----------------------------------
+# tk_job <job_name> <json_body>
+tk_job() {
+  local job="$1" body="${2:-{}}"
+  _tk_req POST "$ENGINE_BASE/admin/jobs/$job" \
+    -H "Content-Type: application/json" -d "$body"; echo
+}
+# 步 3 · 4 平台改写 + voice：     tk_adapt <piece>
+tk_adapt()   { tk_job adapter_orchestrator "{\"piece_id\":\"$1\"}"; }
+# 步 4 · 单平台 voice 复检：       tk_voice <piece> <platform>
+tk_voice()   { tk_job voice_checker "{\"piece_id\":\"$1\",\"platform\":\"$2\"}"; }
+# 步 7 · 短视频渲染（异步）：      tk_video <piece> [voice]
+tk_video()   { tk_job mpt_runner "{\"piece_id\":\"$1\",\"voice\":\"${2:-zh-CN-YunxiNeural-Male}\"}"; }
+# 步 8 · UTM 短链：                tk_utm <piece> <target_url(https://taskon.xyz/...)> <hook_type>
+tk_utm()     { tk_job utm_generator "{\"piece_id\":\"$1\",\"target_url\":\"$2\",\"hook_type\":\"$3\"}"; }
+# 步 10 · Custom Slice KOL DM：    tk_slice <piece>
+tk_slice()   { tk_job custom_slice_generator "{\"piece_id\":\"$1\"}"; }
+# 步 11 · 调度 dry-run：           tk_dryrun <piece>
+tk_dryrun()  { tk_job schedule_planner "{\"piece_id\":\"$1\",\"dry_run\":true}"; }
+# 步 12(路径A) · 真发排程：        tk_schedule <piece>
+tk_schedule(){ tk_job schedule_planner "{\"piece_id\":\"$1\"}"; }
+# 步 13 · 记 KOL DM：              tk_logdm <piece> <@kol> <kind> <tweet_url>
+tk_logdm()   { tk_job kol_relation_tracker \
+  "{\"subcommand\":\"log-dm\",\"piece_id\":\"$1\",\"kol\":\"$2\",\"kind\":\"$3\",\"tweet_url\":\"$4\"}"; }
+
+# --- 步骤 12(路径B) · 急发：绕过错峰立刻发（公网 admin，已有端点）---------
+# tk_publish <piece> <platforms逗号分隔> [offset_minutes]
+tk_publish() {
+  local piece="$1" platforms="${2:-linkedin_post,yt_shorts}" offset="${3:-10}"
+  _tk_req POST "$ENGINE_BASE/admin/run_publish" -H "Content-Type: application/json" \
+    -d "{\"piece_id\":\"$piece\",\"platforms\":\"$platforms\",\"offset_minutes\":$offset}"; echo
+}
+
+# --- 步骤 5 · 数据关结果 ---------------------------------------------------
+# 过：tk_state <piece> reviewed   ；砍（红线）：tk_kill <piece>
+tk_state() { _tk_req POST "$ENGINE_BASE/admin/pieces/$1/state" \
+  -H "Content-Type: application/json" -d "{\"state\":\"$2\"}"; echo; }
+tk_kill()  { _tk_req POST "$ENGINE_BASE/admin/pieces/$1/kill" \
+  -H "Content-Type: application/json" -d '{}'; echo; }
+
+# --- 任务轮询（异步 job 看结果）：tk_poll <task_id> -----------------------
+tk_poll() { _tk_req GET "$ENGINE_BASE/admin/tasks/$1"; echo; }
+
+# 阻塞等到任务结束：tk_wait <task_id> [最多秒数,默认120]
+tk_wait() {
+  local tid="$1" max="${2:-120}" waited=0
+  while :; do
+    local s; s="$(_tk_req GET "$ENGINE_BASE/admin/tasks/$tid" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null)"
+    echo "  task $tid: $s (${waited}s)"
+    case "$s" in done:*|failed:*) return 0;; esac
+    [ "$waited" -ge "$max" ] && { echo "  ✗ 超时 ${max}s"; return 1; }
+    sleep 3; waited=$((waited+3))
+  done
+}
+
+echo "tk.sh loaded · ENGINE_BASE=$ENGINE_BASE · 函数: tk_health tk_hot tk_write tk_read tk_ls tk_select tk_adapt tk_voice tk_video tk_utm tk_slice tk_dryrun tk_schedule tk_publish tk_state tk_kill tk_logdm tk_job tk_poll tk_wait"

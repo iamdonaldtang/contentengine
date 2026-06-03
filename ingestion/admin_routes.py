@@ -448,3 +448,415 @@ def admin_restart_signal() -> tuple[Response, int]:
         "sentinel": str(sentinel),
         "note": "host watch_tunnel_health.ps1 must pick up signal within 60s; otherwise manual docker compose restart needed",
     }), 202
+
+
+# =========================================================================== #
+# HTTP-first pipeline surface (2026-06-03 · 方案A)
+# ---------------------------------------------------------------------------
+# 让 Cowork sandbox 纯靠公网 HTTPS 跑完全流程操作手册 v3 的 13 步，
+# 彻底不依赖 SMB(Z:) 写盘 / Tailscale SSH —— 二者在 Cowork sandbox 里物理不可达。
+#
+#   文件契约（替代 Z:\drafts 读写）
+#     POST /admin/runtime-file/<name>     写 hot_topics_*.json 等 runtime 根文件   (步1.1)
+#     POST /admin/drafts/<piece>/<file>   写文本草稿 (.md/.yaml/.json/.txt)         (步1.2/2/9)
+#     GET  /admin/drafts/<piece>/<file>   读文本草稿                                (步3/4/5/8/11)
+#     GET  /admin/drafts/<piece>          列 piece 文件 + state                     (审稿)
+#   Job 触发（替代 run_remote.ps1 -Job → docker exec）
+#     POST /admin/jobs/<job_name>         白名单派发 → _spawn_task (复用)           (步3/7/8/10/11/12/13)
+#   状态迁移（替代裸 -Sqlite UPDATE）
+#     POST /admin/pieces/<piece>/state    枚举校验 + 参数化 update_state            (步1.2/5)
+#     POST /admin/pieces/<piece>/select   校验 selection_card → 置 selected         (步1.2 validate)
+#     POST /admin/pieces/<piece>/kill     数据关失败=砍：删行 + 删目录(红线)        (步5 fail)
+#
+# 安全：全部 Bearer (_require_auth)；piece_id/filename 正则 + resolve().relative_to
+# 防路径穿越；job 白名单 + 逐 job 参数校验；list-exec(无 shell) 杜绝命令注入；
+# 写扩展名白名单（禁二进制/可执行，图片上传留 phase2）。
+# =========================================================================== #
+
+_DRAFTS_ROOT = Path(os.environ.get("DRAFTS_DIR") or "/app/runtime/drafts")
+_RUNTIME_ROOT = Path(os.environ.get("RUNTIME_DIR") or "/app/runtime")
+
+_DRAFT_TEXT_SUFFIXES = {".md", ".yaml", ".yml", ".json", ".txt"}
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+_RUNTIME_FILE_RE = re.compile(r"^(hot_topics|candidates_pool)_[A-Za-z0-9_-]{1,40}\.json$")
+
+_PIECE_STATES = {
+    "candidate", "selected", "drafted",
+    "reviewed", "scheduled", "published", "measured",
+}
+
+# 平台 key（voice_checker / utm 用）
+_PLATFORM_KEY_RE = re.compile(r"^[a-z0-9_]{1,20}$")
+_ACCOUNTS_RE = re.compile(r"^[a-z0-9_,]{1,80}$")
+_HOOK_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+_VOICE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]{1,40}$")
+_KOL_RE = re.compile(r"^@?[A-Za-z0-9_]{1,30}$")
+_KIND_RE = re.compile(r"^[a-z_]{1,20}$")
+
+
+def _safe_piece_dir(piece_id: str) -> Path | None:
+    """Resolve drafts/<piece_id>, guaranteed inside _DRAFTS_ROOT, else None."""
+    if not _PIECE_ID_RE.match(piece_id):
+        return None
+    root = _DRAFTS_ROOT.resolve()
+    d = (root / piece_id).resolve()
+    try:
+        d.relative_to(root)
+    except ValueError:
+        return None
+    return d
+
+
+def _safe_draft_file(piece_id: str, filename: str) -> Path | None:
+    """Resolve drafts/<piece_id>/<filename>, path-traversal safe, else None."""
+    if not _FILENAME_RE.match(filename) or filename.startswith("."):
+        return None
+    base = _safe_piece_dir(piece_id)
+    if base is None:
+        return None
+    p = (base / filename).resolve()
+    try:
+        p.relative_to(base)
+    except ValueError:
+        return None
+    return p
+
+
+# --------------------------------------------------------------------------- #
+# File contract endpoints
+# --------------------------------------------------------------------------- #
+
+
+@admin_bp.post("/runtime-file/<filename>")
+def admin_write_runtime_file(filename: str) -> tuple[Response, int]:
+    """Write a whitelisted runtime-root json (hot_topics_* / candidates_pool_*)."""
+    err = _require_auth()
+    if err:
+        return err
+    if not _RUNTIME_FILE_RE.match(filename):
+        return _err(400, "bad_filename",
+                    "filename must match hot_topics_<tag>.json or candidates_pool_<tag>.json")
+    data = request.get_data(cache=False)
+    if not data:
+        return _err(400, "empty_body", "request body is empty")
+    try:
+        json.loads(data.decode("utf-8"))
+    except Exception as exc:
+        return _err(400, "bad_json", f"body is not valid UTF-8 JSON: {type(exc).__name__}")
+    root = _RUNTIME_ROOT.resolve()
+    target = (root / filename).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return _err(400, "bad_path", "resolved path escapes runtime root")
+    target.write_bytes(data)
+    logger.info("admin runtime-file written name=%s bytes=%d", filename, len(data))
+    return jsonify({"status": "written", "path": f"runtime/{filename}", "bytes": len(data)}), 201
+
+
+@admin_bp.post("/drafts/<piece_id>/<filename>")
+def admin_write_draft(piece_id: str, filename: str) -> tuple[Response, int]:
+    """Write a text draft into drafts/<piece_id>/ (creates dir). Text suffixes only."""
+    err = _require_auth()
+    if err:
+        return err
+    p = _safe_draft_file(piece_id, filename)
+    if p is None:
+        return _err(400, "bad_path", "invalid piece_id or filename")
+    if p.suffix.lower() not in _DRAFT_TEXT_SUFFIXES:
+        return _err(400, "bad_suffix",
+                    f"writable suffixes: {sorted(_DRAFT_TEXT_SUFFIXES)} (binaries via phase2 asset upload)")
+    data = request.get_data(cache=False)
+    if not data:
+        return _err(400, "empty_body", "request body is empty")
+    if p.suffix.lower() == ".json":
+        try:
+            json.loads(data.decode("utf-8"))
+        except Exception as exc:
+            return _err(400, "bad_json", f"invalid JSON: {type(exc).__name__}")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    logger.info("admin draft written piece=%s file=%s bytes=%d", piece_id, filename, len(data))
+    return jsonify({
+        "status": "written", "piece_id": piece_id, "file": filename, "bytes": len(data),
+    }), 201
+
+
+@admin_bp.get("/drafts/<piece_id>/<filename>")
+def admin_read_draft(piece_id: str, filename: str) -> Any:
+    """Read a text draft as text/plain. Binaries are served by media_bp (signed)."""
+    err = _require_auth()
+    if err:
+        return err
+    p = _safe_draft_file(piece_id, filename)
+    if p is None:
+        return _err(400, "bad_path", "invalid piece_id or filename")
+    if p.suffix.lower() not in _DRAFT_TEXT_SUFFIXES:
+        return _err(400, "bad_suffix", "only text drafts readable here; binaries via media route")
+    if not p.exists():
+        return _err(404, "not_found", f"{filename} not found in {piece_id}")
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.exception("admin read draft failed piece=%s file=%s", piece_id, filename)
+        return _err(500, "read_failed", f"{type(exc).__name__}")
+    return Response(text, mimetype="text/plain; charset=utf-8")
+
+
+@admin_bp.get("/drafts/<piece_id>")
+def admin_list_draft(piece_id: str) -> tuple[Response, int]:
+    """List files in drafts/<piece_id>/ plus the piece's DB state."""
+    err = _require_auth()
+    if err:
+        return err
+    d = _safe_piece_dir(piece_id)
+    if d is None:
+        return _err(400, "bad_piece_id", "invalid piece_id")
+    if not d.exists():
+        return _err(404, "not_found", f"piece dir not found: {piece_id}")
+    files = sorted(f.name for f in d.iterdir() if f.is_file())
+    state = None
+    try:
+        row = db.fetchone("SELECT state FROM pieces WHERE id = ?", (piece_id,))
+        state = row["state"] if row else None
+    except Exception:
+        logger.exception("admin list draft: state lookup failed piece=%s", piece_id)
+    return jsonify({"piece_id": piece_id, "state": state, "files": files}), 200
+
+
+# --------------------------------------------------------------------------- #
+# Job dispatch — curated whitelist (list-exec, no shell)
+# --------------------------------------------------------------------------- #
+
+_ALLOWED_JOBS = {
+    "adapter_orchestrator", "voice_checker", "custom_slice_generator",
+    "mpt_runner", "utm_generator", "schedule_planner", "kol_relation_tracker",
+}
+
+
+def _job_argv(job: str, payload: dict[str, Any]) -> list[str] | None:
+    """Build a validated argv for a whitelisted job, or None if args invalid.
+
+    list-exec means shell metacharacters are inert; validation here is for
+    correctness + path/flag hygiene, not shell-escaping.
+    """
+    pid = (payload.get("piece_id") or "").strip()
+    pid_ok = bool(_PIECE_ID_RE.match(pid))
+
+    if job == "adapter_orchestrator":
+        if not pid_ok:
+            return None
+        return ["python", "-m", "jobs.adapter_orchestrator", "--piece-id", pid]
+
+    if job == "voice_checker":
+        if not pid_ok:
+            return None
+        platform = (payload.get("platform") or "").strip()
+        if not _PLATFORM_KEY_RE.match(platform):
+            return None
+        return ["python", "-m", "jobs.voice_checker", "--piece-id", pid, "--platform", platform]
+
+    if job == "custom_slice_generator":
+        if not pid_ok:
+            return None
+        argv = ["python", "-m", "jobs.custom_slice_generator", "--piece-id", pid]
+        top_n = payload.get("top_n")
+        if top_n is not None:
+            if not isinstance(top_n, int) or not (1 <= top_n <= 20):
+                return None
+            argv += ["--top-n", str(top_n)]
+        if bool(payload.get("force", False)):
+            argv.append("--force")
+        return argv
+
+    if job == "mpt_runner":
+        if not pid_ok:
+            return None
+        voice = (payload.get("voice") or "zh-CN-YunxiNeural-Male").strip()
+        if not _VOICE_RE.match(voice):
+            return None
+        argv = ["python", "-m", "jobs.mpt_runner", "--piece-id", pid, "--voice", voice]
+        if bool(payload.get("force", False)):
+            argv.append("--force")
+        return argv
+
+    if job == "utm_generator":
+        if not pid_ok:
+            return None
+        target = (payload.get("target_url") or "").strip()
+        if not target.startswith("https://taskon.xyz/"):
+            return None
+        platforms = (payload.get("platforms") or "twitter,linkedin,youtube").strip()
+        if not _PLATFORMS_RE.match(platforms):
+            return None
+        accounts = (payload.get("accounts") or "donald_en,taskon_official").strip()
+        if not _ACCOUNTS_RE.match(accounts):
+            return None
+        hook = (payload.get("hook_type") or "default").strip()
+        if not _HOOK_RE.match(hook):
+            return None
+        return ["python", "-m", "jobs.utm_generator", "--piece-id", pid,
+                "--target-url", target, "--platforms", platforms,
+                "--accounts", accounts, "--hook-type", hook]
+
+    if job == "schedule_planner":
+        if not pid_ok:
+            return None
+        argv = ["python", "-m", "jobs.schedule_planner", "--piece-id", pid]
+        if bool(payload.get("dry_run", False)):
+            argv.append("--dry-run")
+        return argv
+
+    if job == "kol_relation_tracker":
+        if (payload.get("subcommand") or "").strip() != "log-dm":
+            return None
+        kol = (payload.get("kol") or "").strip()
+        if not _KOL_RE.match(kol):
+            return None
+        kind = (payload.get("kind") or "reply").strip()
+        if not _KIND_RE.match(kind):
+            return None
+        argv = ["python", "-m", "jobs.kol_relation_tracker", "log-dm", "--kol", kol, "--kind", kind]
+        tweet = (payload.get("tweet_url") or "").strip()
+        if tweet:
+            if not tweet.startswith("https://"):
+                return None
+            argv += ["--tweet-url", tweet]
+        if pid_ok:
+            argv += ["--piece-id", pid]
+        notes = (payload.get("notes") or "").strip()
+        if notes:
+            argv += ["--notes", notes[:200]]
+        return argv
+
+    return None
+
+
+@admin_bp.post("/jobs/<job_name>")
+def admin_run_job(job_name: str) -> tuple[Response, int]:
+    """Trigger a whitelisted engine job inside the container (async task)."""
+    err = _require_auth()
+    if err:
+        return err
+    if job_name not in _ALLOWED_JOBS:
+        return _err(400, "unknown_job", f"job not in whitelist: {sorted(_ALLOWED_JOBS)}")
+    payload = request.get_json(silent=True) or {}
+    argv = _job_argv(job_name, payload)
+    if argv is None:
+        return _err(400, "bad_args", f"missing/invalid args for job {job_name}")
+    pid = (payload.get("piece_id") or "").strip()
+    if pid and _PIECE_ID_RE.match(pid):
+        d = _safe_piece_dir(pid)
+        if d is None or not d.exists():
+            return _err(404, "piece_not_found", f"piece dir not found: {pid}")
+    task_id = uuid.uuid4().hex[:12]
+    _spawn_task(task_id, argv)
+    logger.info("admin job accepted task=%s job=%s piece=%s", task_id, job_name, pid or "-")
+    return jsonify({
+        "status": "accepted", "task_id": task_id, "job": job_name,
+        "piece_id": pid or None, "poll_url": f"/admin/tasks/{task_id}",
+    }), 202
+
+
+# --------------------------------------------------------------------------- #
+# Piece state transitions — safe, no raw SQL surface
+# --------------------------------------------------------------------------- #
+
+
+@admin_bp.post("/pieces/<piece_id>/state")
+def admin_set_state(piece_id: str) -> tuple[Response, int]:
+    """Set pieces.state via parameterized update_state (enum-validated)."""
+    err = _require_auth()
+    if err:
+        return err
+    if not _PIECE_ID_RE.match(piece_id):
+        return _err(400, "bad_piece_id", "invalid piece_id")
+    payload = request.get_json(silent=True) or {}
+    state = (payload.get("state") or "").strip()
+    if state not in _PIECE_STATES:
+        return _err(400, "bad_state", f"state must be one of: {sorted(_PIECE_STATES)}")
+    actor = (payload.get("actor") or "cowork").strip()[:40] or "cowork"
+    notes = payload.get("notes")
+    if not db.pieces.get(piece_id):
+        return _err(404, "piece_not_found", f"no piece row: {piece_id}")
+    try:
+        db.pieces.update_state(piece_id, state, actor=actor, notes=notes)
+    except Exception as exc:
+        logger.exception("admin set_state failed piece=%s state=%s", piece_id, state)
+        return _err(500, "update_failed", f"{type(exc).__name__}")
+    logger.info("admin state piece=%s -> %s actor=%s", piece_id, state, actor)
+    return jsonify({"status": "updated", "piece_id": piece_id, "state": state}), 200
+
+
+@admin_bp.post("/pieces/<piece_id>/select")
+def admin_select_piece(piece_id: str) -> tuple[Response, int]:
+    """validate_selection equivalent: check selection_card.yaml → upsert state='selected'."""
+    err = _require_auth()
+    if err:
+        return err
+    if not _PIECE_ID_RE.match(piece_id):
+        return _err(400, "bad_piece_id", "invalid piece_id")
+    card = _safe_draft_file(piece_id, "selection_card.yaml")
+    if card is None or not card.exists():
+        return _err(404, "card_not_found", "selection_card.yaml not found; write it first")
+    try:
+        import yaml
+        data = yaml.safe_load(card.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return _err(400, "bad_yaml", f"selection_card.yaml not parseable: {type(exc).__name__}")
+    if not isinstance(data, dict):
+        return _err(400, "bad_card", "selection_card.yaml must be a mapping")
+    missing = [k for k in ("id", "title_hypothesis", "hook_type") if not data.get(k)]
+    if missing:
+        return _err(400, "missing_fields", f"selection_card missing: {missing}")
+    if str(data.get("id")).strip() != piece_id:
+        return _err(400, "id_mismatch", f"card id {data.get('id')!r} != {piece_id!r}")
+    try:
+        if db.pieces.get(piece_id):
+            db.pieces.update_state(piece_id, "selected", actor="cowork", notes="validated via /select")
+        else:
+            db.pieces.create(piece_id, card.read_text(encoding="utf-8"), actor="cowork")
+            db.pieces.update_state(piece_id, "selected", actor="cowork", notes="validated via /select")
+    except Exception as exc:
+        logger.exception("admin select upsert failed piece=%s", piece_id)
+        return _err(500, "upsert_failed", f"{type(exc).__name__}")
+    logger.info("admin select piece=%s -> selected", piece_id)
+    return jsonify({"status": "selected", "piece_id": piece_id}), 200
+
+
+@admin_bp.post("/pieces/<piece_id>/kill")
+def admin_kill_piece(piece_id: str) -> tuple[Response, int]:
+    """数据关失败 = 砍（红线）：delete piece row + draft dir. Irreversible."""
+    err = _require_auth()
+    if err:
+        return err
+    if not _PIECE_ID_RE.match(piece_id):
+        return _err(400, "bad_piece_id", "invalid piece_id")
+    # pieces 有 FK 子表 (state_events / publishings / mpt_tasks ... NO ACTION)，
+    # 裸 DELETE 会 FK 报错。运行时发现所有带 piece_id 列的表，先删子行再删 piece，
+    # 单事务保证原子性。表名来自 sqlite_master（可信，非用户输入），piece_id 参数化。
+    try:
+        with db.transaction() as conn:
+            tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")]
+            for t in tables:
+                if t == "pieces":
+                    continue
+                cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
+                if "piece_id" in cols:
+                    conn.execute(f"DELETE FROM {t} WHERE piece_id = ?", (piece_id,))
+            conn.execute("DELETE FROM pieces WHERE id = ?", (piece_id,))
+    except Exception as exc:
+        logger.exception("admin kill: db cascade delete failed piece=%s", piece_id)
+        return _err(500, "delete_failed", f"{type(exc).__name__}")
+    d = _safe_piece_dir(piece_id)
+    dir_removed = False
+    if d and d.exists():
+        import shutil
+        try:
+            shutil.rmtree(d)
+            dir_removed = True
+        except Exception:
+            logger.exception("admin kill: rmtree failed piece=%s", piece_id)
+    logger.warning("admin kill piece=%s dir_removed=%s", piece_id, dir_removed)
+    return jsonify({"status": "killed", "piece_id": piece_id, "dir_removed": dir_removed}), 200

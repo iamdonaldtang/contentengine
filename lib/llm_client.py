@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 import requests
@@ -135,12 +136,17 @@ class LLMClient:
                 os.environ.get("ENABLE_ANTHROPIC_FALLBACK", "true").strip().lower() == "true"
                 and bool(self._anthropic_api_key)
             )
+            # 2026-05-18: default 2 → 5. Combined with exponential backoff
+            # in complete() the worst-case wait is 1+2+4+8 = 15s before giving
+            # up on a single key — enough to ride out most MiniMaxi 429/5xx
+            # windows without Anthropic fallback (which Donald has opted out
+            # of on cost grounds; see memory/user_llm_cost_constraint.md).
             try:
                 self._max_retries_per_key = max(
-                    1, int(os.environ.get("LLM_MAX_RETRIES_PER_KEY", "2"))
+                    1, int(os.environ.get("LLM_MAX_RETRIES_PER_KEY", "5"))
                 )
             except ValueError:
-                self._max_retries_per_key = 2
+                self._max_retries_per_key = 5
             try:
                 self._timeout = float(os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS", "60"))
             except ValueError:
@@ -192,6 +198,10 @@ class LLMClient:
         last_exc: BaseException | None = None
 
         # --- primary: MiniMaxi pool --- #
+        # Retryable errors get exponential backoff between attempts on the
+        # SAME key (most MiniMaxi 429/5xx windows are seconds-long; immediate
+        # retry just burns the next quota slot). Non-retryable errors rotate
+        # off the key with no wait.
         for idx, key in enumerate(self._minimaxi_keys, start=1):
             for attempt in range(1, self._max_retries_per_key + 1):
                 try:
@@ -211,6 +221,13 @@ class LLMClient:
                         attempt,
                         exc,
                     )
+                    if attempt < self._max_retries_per_key:
+                        backoff = 2 ** (attempt - 1)  # 1, 2, 4, 8, 16 s
+                        logger.info(
+                            "MiniMaxi key#%d backoff %ds before retry %d",
+                            idx, backoff, attempt + 1,
+                        )
+                        time.sleep(backoff)
                     continue
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
@@ -243,7 +260,10 @@ class LLMClient:
             logger.warning("Anthropic fallback disabled or missing API key; cannot recover")
 
         # --- total failure --- #
-        self._fire_p1("complete() exhausted all providers", last_exc)
+        # P2 (was P1) — single-key + no Anthropic fallback means transient
+        # MiniMaxi bursts land here; next cron typically recovers. See
+        # memory/user_llm_cost_constraint.md for cost rationale.
+        self._fire_alert("P2", "complete() exhausted all providers", last_exc)
         raise LLMClientError(
             "LLM completion failed across all MiniMaxi keys and Anthropic fallback",
             cause=last_exc,
@@ -304,7 +324,7 @@ class LLMClient:
                     f"Previous response was:\n{raw}"
                 )
 
-        self._fire_p1("complete_json() could not parse a valid JSON object", last_err)
+        self._fire_alert("P2", "complete_json() could not parse a valid JSON object", last_err)
         raise LLMClientError(
             f"complete_json failed to produce valid JSON after 3 attempts; "
             f"last_error={last_err}; last_raw={last_raw[:300]}",
@@ -444,12 +464,20 @@ class LLMClient:
         return cleaned.strip()
 
     @staticmethod
-    def _fire_p1(message: str, exc: BaseException | None) -> None:
+    def _fire_alert(severity: str, message: str, exc: BaseException | None) -> None:
+        """Emit a Lark alert at the given severity.
+
+        2026-05-18: downgraded LLM-exhaustion alerts from P1 to P2. Reason:
+        single-key MiniMaxi setup + no Anthropic fallback (cost-driven, see
+        memory/user_llm_cost_constraint.md) means short MiniMaxi 429/5xx
+        bursts trigger this path even though the next cron run will recover.
+        Don't wake people up — let the heartbeat + weekly_reporter notice.
+        """
         try:
             from lib.lark import alert
 
             alert(
-                "P1",
+                severity,
                 f"LLMClient: {message}",
                 {
                     "last_exception_type": type(exc).__name__ if exc else "unknown",
@@ -457,7 +485,7 @@ class LLMClient:
                 },
             )
         except Exception:
-            logger.exception("failed to emit P1 Lark alert from LLMClient")
+            logger.exception("failed to emit %s Lark alert from LLMClient", severity)
 
 
 # --------------------------------------------------------------------------- #

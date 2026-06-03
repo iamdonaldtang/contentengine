@@ -21,7 +21,21 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$EngineRoot = "D:\Taskon\marketing\engine"
+
+# 路径自适应 · 优先环境变量 → 从脚本位置推导 → fallback 主笔记本默认
+if ($env:ENGINE_ROOT) {
+    $EngineRoot = $env:ENGINE_ROOT
+} elseif ($PSScriptRoot -and (Test-Path "$PSScriptRoot\..\runtime")) {
+    # 脚本在 <engine_root>/scripts/ 下，runtime 在 <engine_root>/runtime/
+    $EngineRoot = (Resolve-Path "$PSScriptRoot\..").Path
+} elseif (Test-Path "D:\engine-host\taskon\engine\runtime") {
+    # 引擎机默认路径
+    $EngineRoot = "D:\engine-host\taskon\engine"
+} else {
+    # 主笔记本默认路径
+    $EngineRoot = "D:\Taskon\marketing\engine"
+}
+
 $StateFile  = "$EngineRoot\runtime\tunnel_health_state.txt"
 $LogFile    = "$EngineRoot\runtime\logs\tunnel_health.log"
 

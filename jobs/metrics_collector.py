@@ -10,11 +10,18 @@ outage cannot stop the rest of the pipeline. Failures are logged as P1 and
 recorded into ``publish_failures``. The job always writes a ``heartbeat`` row
 at the end.
 
+Default skip-source = ``ga4,listmonk,btouch`` (2026-05-18). Those three旁支
+modules are currently parked while the main pipeline (topic → draft → Postiz)
+stabilises — every daily run was generating P1 noise for credentials that
+were intentionally not configured. Override by passing
+``--skip-source ""`` (or a different subset) when those sources come back.
+
 CLI::
 
     python -m jobs.metrics_collector
     python -m jobs.metrics_collector --date 2026-05-12
-    python -m jobs.metrics_collector --skip-source postiz,ga4
+    python -m jobs.metrics_collector --skip-source ""             # run all
+    python -m jobs.metrics_collector --skip-source postiz,ga4     # custom
 """
 from __future__ import annotations
 
@@ -671,8 +678,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--skip-source",
         type=str,
-        default="",
-        help=f"Comma-separated source(s) to skip. Choices: {','.join(ALL_SOURCES)}",
+        default=os.environ.get("METRICS_SKIP_SOURCES", "ga4,listmonk,btouch"),
+        help=(
+            "Comma-separated source(s) to skip. "
+            f"Choices: {','.join(ALL_SOURCES)}. "
+            "Default ``ga4,listmonk,btouch`` (旁支模块暂停 2026-05-18); "
+            "pass ``--skip-source ''`` to re-enable all sources."
+        ),
     )
     return p
 
