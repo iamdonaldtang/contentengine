@@ -13,7 +13,11 @@
 [CmdletBinding()]
 param(
   [string]$EngineBase = "https://ingest.taskon.xyz",
-  [string]$Ref = "origin/main"
+  [string]$Ref = "origin/main",
+  # docker compose 服务名（非容器显示名）。2026-06-03 起 TaskOn/Pliven 共存，
+  # `docker compose config --services` 实测为 taskon-ingestion（原 ingestion）。
+  # Pliven 用本脚本副本时改成 pliven-ingestion。
+  [string]$Service = "taskon-ingestion"
 )
 $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."   # 切到 engine 仓根
@@ -23,12 +27,12 @@ git fetch origin
 git checkout $Ref -- ingestion/    # 取 ingestion 全量（admin_routes / app / media_routes ...）
 
 Write-Host "== 2/5 重建 ingestion 容器 =="
-docker compose up -d --build ingestion
+docker compose up -d --build $Service
 
 Write-Host "== 3/5 等待并探一眼容器内代码 =="
 Start-Sleep -Seconds 4
 try {
-  $probe = docker compose exec -T ingestion python -c "import ingestion.admin_routes as a; print('NEW' if hasattr(a,'admin_upload_asset') else 'OLD')" 2>$null
+  $probe = docker compose exec -T $Service python -c "import ingestion.admin_routes as a; print('NEW' if hasattr(a,'admin_upload_asset') else 'OLD')" 2>$null
   Write-Host "  容器 admin_routes: $probe（仅参考；最终以冒烟为准）"
 } catch { Write-Host "  （容器内探测跳过）" }
 

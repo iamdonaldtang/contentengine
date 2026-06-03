@@ -377,7 +377,9 @@ def admin_health_all() -> tuple[Response, int]:
         try:
             r = requests.get(
                 f"{postiz_url}/api/public/v1/posts",
-                headers={"Authorization": f"Bearer {postiz_key}"},
+                # Postiz 自托管公网 API 要**裸 key**，加 Bearer 前缀会 401（2026-06-03 实测）。
+                # 与 sources/postiz.py 的 _headers() 一致。
+                headers={"Authorization": postiz_key},
                 timeout=5,
             )
             out["postiz"] = f"ok:{r.status_code}" if r.status_code < 500 else f"fail:{r.status_code}"

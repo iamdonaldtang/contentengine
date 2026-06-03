@@ -5,7 +5,7 @@ TaskOn engine remote command wrapper - call engine on remote host from main lapt
 .DESCRIPTION
 Original command (under v3 architecture, main laptop calls engine on remote host) is long:
 
-  ssh donald@engine "cd D:/engine-host/taskon/engine && docker compose exec -T engine python -m jobs.adapter_orchestrator --piece-id 20260602-01"
+  ssh donald@engine "cd D:/engine-host/taskon/engine && docker compose exec -T ${EngineService} python -m jobs.adapter_orchestrator --piece-id 20260602-01"
 
 Wrapped:
 
@@ -111,6 +111,11 @@ param(
     [string]$RemoteUser = 'donald',
     [string]$RemoteEngineDir = $(if ($env:REMOTE_ENGINE_DIR) { $env:REMOTE_ENGINE_DIR } else { 'D:/engine-host/taskon/engine' }),
 
+    # docker compose 服务名（不是容器显示名，也不是 Tailscale 主机名）。
+    # 2026-06-03 起 TaskOn/Pliven 共存，`docker compose config --services` 实测为
+    # taskon-engine（原 engine）。可用 -EngineService 或 $env:ENGINE_SERVICE 覆盖。
+    [string]$EngineService = $(if ($env:ENGINE_SERVICE) { $env:ENGINE_SERVICE } else { 'taskon-engine' }),
+
     [switch]$Local,
     [switch]$DryRun
 )
@@ -147,15 +152,15 @@ function Build-InnerCommand {
 
     switch ($ParameterSet) {
         'Job' {
-            return "docker compose exec -T engine python -m jobs.$Job $pieceArg $ExtraArgs".Trim()
+            return "docker compose exec -T ${EngineService} python -m jobs.$Job $pieceArg $ExtraArgs".Trim()
         }
         'Script' {
-            return "docker compose exec -T engine python -m scripts.$Script $pieceArg $ExtraArgs".Trim()
+            return "docker compose exec -T ${EngineService} python -m scripts.$Script $pieceArg $ExtraArgs".Trim()
         }
         'Sqlite' {
             # Escape double quotes inside SQL
             $sqlEscaped = $Sqlite -replace '"', '\"'
-            return "docker compose exec -T engine sqlite3 /app/runtime/state.db `"$sqlEscaped`""
+            return "docker compose exec -T ${EngineService} sqlite3 /app/runtime/state.db `"$sqlEscaped`""
         }
         'Compose' {
             return "docker compose $Compose $ExtraArgs".Trim()
