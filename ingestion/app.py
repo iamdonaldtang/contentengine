@@ -155,6 +155,12 @@ app.register_blueprint(mpt_cb_bp)
 # Unsigned / stale requests rejected with 401.
 app.register_blueprint(media_bp)
 
+# Register public password-gated upload Blueprint (GET /upload + POST /upload/asset/...).
+# For non-Cowork helpers to deliver 配图. Gated by UPLOAD_API_TOKEN (separate weak token);
+# uploads disabled if UPLOAD_API_TOKEN is unset (safe default).
+from ingestion.upload_routes import upload_bp  # noqa: E402
+app.register_blueprint(upload_bp)
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
