@@ -1,0 +1,7 @@
+# Shell scripts MUST keep LF line endings. The engine host's git has autocrlf
+# enabled, which checked out *.sh as CRLF; the container's Linux bash then
+# choked on the trailing \r ("set: pipefail: invalid option name", and a syntax
+# error at "case ... in\r"), failing the in-container smoke gate even though the
+# committed blobs are clean LF. eol=lf forces LF on checkout EVERYWHERE,
+# regardless of core.autocrlf, so the Docker image always gets clean LF scripts.
+*.sh text eol=lf

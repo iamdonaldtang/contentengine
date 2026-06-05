@@ -55,6 +55,9 @@ _TARGETS: list[_TargetSpec] = [
     _TargetSpec("medium_long", "medium_long.md", "blog"),
     _TargetSpec("carousel_10pages", "carousel_10pages.md", "linkedin_carousel"),
     _TargetSpec("shorts_60s", "shorts_60s.md", "yt_shorts"),
+    # 2026-06-05: PR 投稿文章。voice_platform 复用 "blog"。不走自动发布（手动 pitch 媒体），
+    # schedule_planner 无 pr_article slot/integration，生成后仅落 runtime/drafts 供人工取用。
+    _TargetSpec("pr_article", "pr_article.md", "blog"),
 ]
 
 

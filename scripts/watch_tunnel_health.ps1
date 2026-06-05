@@ -39,31 +39,36 @@ if ($env:ENGINE_ROOT) {
 $StateFile  = "$EngineRoot\runtime\tunnel_health_state.txt"
 $LogFile    = "$EngineRoot\runtime\logs\tunnel_health.log"
 
-# ---------- Install · Scheduled Task ----------
+# ---------- Install · Scheduled Task (use schtasks.exe instead of PowerShell Register-ScheduledTask) ----------
+# Note: PowerShell Register-ScheduledTask serializes RepetitionDuration as ISO 8601 P{N}D
+# but Task Scheduler XML schema rejects large values (HRESULT 0x80041318).
+# Use cmd-native schtasks.exe instead - no schema limit, more reliable.
 if ($InstallScheduledTask) {
     $TaskName = "TaskOn-TunnelHealth"
-    $TaskAction = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $TaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5) `
-        -RepetitionDuration ([TimeSpan]::MaxValue)
-    $TaskSettings = New-ScheduledTaskSettingsSet `
-        -StartWhenAvailable -DontStopOnIdleEnd `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-    $TaskPrincipal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $taskCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
 
-    Register-ScheduledTask -TaskName $TaskName `
-        -Action $TaskAction -Trigger $TaskTrigger `
-        -Settings $TaskSettings -Principal $TaskPrincipal `
-        -Description "TaskOn V1 · cloudflared + ingest + shlink 健康哨兵 (5min 间隔)" `
-        -Force | Out-Null
+    # Use schtasks.exe directly (cmd-native, no XML schema limit)
+    $schtasksArgs = @(
+        "/create",
+        "/SC", "MINUTE",
+        "/MO", "5",
+        "/TN", $TaskName,
+        "/TR", $taskCmd,
+        "/RU", "SYSTEM",
+        "/RL", "HIGHEST",
+        "/F"
+    )
 
-    Write-Host "✓ Scheduled Task 已注册: $TaskName" -ForegroundColor Green
-    Write-Host "  每 5min 自动跑 · SYSTEM 账号 · 开机自启"
-    Write-Host "  查看: Get-ScheduledTask -TaskName $TaskName"
-    Write-Host "  删除: Unregister-ScheduledTask -TaskName $TaskName -Confirm:`$false"
+    & schtasks.exe @schtasksArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[X] schtasks failed with exit code $LASTEXITCODE" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "[OK] Scheduled Task registered: $TaskName" -ForegroundColor Green
+    Write-Host "  Schedule: Every 5 minutes (SYSTEM account, HIGHEST RL)"
+    Write-Host "  View:     schtasks /query /TN $TaskName"
+    Write-Host "  Remove:   schtasks /delete /TN $TaskName /F"
     exit 0
 }
 

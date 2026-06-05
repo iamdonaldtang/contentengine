@@ -36,29 +36,32 @@ $BackupDir = "$HostRoot\infra\backups"
 $LogFile   = "$HostRoot\infra\logs\daily-backup.log"
 $RetentionDays = 14
 
-# ---------- Install · Scheduled Task ----------
+# ---------- Install · Scheduled Task (use schtasks.exe - more reliable than PowerShell Register-ScheduledTask) ----------
 if ($InstallScheduledTask) {
     $TaskName = "TaskOn-DailyBackup"
-    $TaskAction = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $TaskTrigger = New-ScheduledTaskTrigger -Daily -At "03:00"
-    $TaskSettings = New-ScheduledTaskSettingsSet `
-        -StartWhenAvailable -DontStopOnIdleEnd `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    $TaskPrincipal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $taskCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
 
-    Register-ScheduledTask -TaskName $TaskName `
-        -Action $TaskAction -Trigger $TaskTrigger `
-        -Settings $TaskSettings -Principal $TaskPrincipal `
-        -Description "TaskOn engine daily backup (state.db + Postiz pg + 14d retention)" `
-        -Force | Out-Null
+    $schtasksArgs = @(
+        "/create",
+        "/SC", "DAILY",
+        "/ST", "03:00",
+        "/TN", $TaskName,
+        "/TR", $taskCmd,
+        "/RU", "SYSTEM",
+        "/RL", "HIGHEST",
+        "/F"
+    )
+
+    & schtasks.exe @schtasksArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[X] schtasks failed with exit code $LASTEXITCODE" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
 
     Write-Host "[OK] Scheduled Task registered: $TaskName" -ForegroundColor Green
-    Write-Host "  Schedule: Daily 03:00 (SYSTEM account)"
-    Write-Host "  View:     Get-ScheduledTask -TaskName $TaskName"
-    Write-Host "  Remove:   Unregister-ScheduledTask -TaskName $TaskName -Confirm:`$false"
+    Write-Host "  Schedule: Daily 03:00 (SYSTEM account, HIGHEST RL)"
+    Write-Host "  View:     schtasks /query /TN $TaskName"
+    Write-Host "  Remove:   schtasks /delete /TN $TaskName /F"
     exit 0
 }
 
@@ -87,21 +90,29 @@ $results = @()
 # ---------- 1. TaskOn engine state.db ----------
 $taskonStateBackup = "$BackupDir\taskon-state-$date.db"
 try {
-    # Use sqlite3 .backup command via docker exec (safe for WAL mode)
-    docker exec -T taskon-engine sqlite3 /app/runtime/state.db ".backup '/tmp/state-backup.db'" 2>&1 | Out-Null
+    # Strategy: Try Python's sqlite3.backup() inside container (safest, handles WAL).
+    # Fallback to docker cp (file copy, WAL slightly less safe but works).
+    $usedPython = $false
+    $pythonScript = "import sqlite3; src=sqlite3.connect('/app/runtime/state.db'); dst=sqlite3.connect('/tmp/state-backup.db'); src.backup(dst); src.close(); dst.close()"
+    docker exec -T taskon-engine python -c $pythonScript 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
+        $usedPython = $true
         docker cp taskon-engine:/tmp/state-backup.db $taskonStateBackup 2>&1 | Out-Null
-        if (Test-Path $taskonStateBackup) {
-            $sizeMB = [math]::Round((Get-Item $taskonStateBackup).Length / 1MB, 2)
-            Write-LogLine "OK"  "TaskOn state.db backup -> $taskonStateBackup ($sizeMB MB)"
-            $results += "TaskOn state.db: OK ($sizeMB MB)"
-        } else {
-            Write-LogLine "ERR" "TaskOn state.db copy failed (file not found after docker cp)"
-            $results += "TaskOn state.db: FAIL (copy)"
-        }
+        docker exec -T taskon-engine rm -f /tmp/state-backup.db 2>&1 | Out-Null
     } else {
-        Write-LogLine "ERR" "TaskOn sqlite3 .backup failed"
-        $results += "TaskOn state.db: FAIL (sqlite3)"
+        # Fallback: docker cp state.db directly (less safe with WAL but works)
+        Write-LogLine "WARN" "Python sqlite3.backup failed, fallback to docker cp"
+        docker cp taskon-engine:/app/runtime/state.db $taskonStateBackup 2>&1 | Out-Null
+    }
+
+    if (Test-Path $taskonStateBackup) {
+        $sizeMB = [math]::Round((Get-Item $taskonStateBackup).Length / 1MB, 2)
+        $method = if ($usedPython) { "python-backup" } else { "docker-cp" }
+        Write-LogLine "OK"  "TaskOn state.db backup -> $taskonStateBackup ($sizeMB MB, method=$method)"
+        $results += "TaskOn state.db: OK ($sizeMB MB)"
+    } else {
+        Write-LogLine "ERR" "TaskOn state.db backup file not created"
+        $results += "TaskOn state.db: FAIL"
     }
 } catch {
     Write-LogLine "ERR" "TaskOn state.db: $($_.Exception.Message)"
@@ -145,13 +156,29 @@ foreach ($name in @("postiz-postgres", "postiz-app-db-1", "postiz-app-postgres-1
 if ($postizPgContainer) {
     $postizPgBackup = "$BackupDir\postiz-pg-$date.sql"
     try {
-        docker exec -T $postizPgContainer pg_dumpall -U postgres > $postizPgBackup 2>&1
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $postizPgBackup)) {
+        # Postiz default credentials per docker-compose.yaml.
+        # Try to auto-detect from container env first; fallback to known defaults.
+        # NOTE: For security, future improvement: read from PASS_FILE or vault.
+        $pgUser = "$(docker exec -T $postizPgContainer printenv POSTGRES_USER 2>$null)".Trim()
+        if (-not $pgUser) { $pgUser = "postiz-user" }       # Postiz fork default
+
+        $pgDb = "$(docker exec -T $postizPgContainer printenv POSTGRES_DB 2>$null)".Trim()
+        if (-not $pgDb) { $pgDb = "postiz-db-local" }       # Postiz fork default
+
+        $pgPass = "$(docker exec -T $postizPgContainer printenv POSTGRES_PASSWORD 2>$null)".Trim()
+        if (-not $pgPass) { $pgPass = "postiz-password" }   # Postiz fork default
+
+        Write-LogLine "INFO" "Postiz pg dump · user=$pgUser db=$pgDb container=$postizPgContainer"
+
+        # pg_dump with PGPASSWORD env (passed via docker exec -e)
+        docker exec -T -e "PGPASSWORD=$pgPass" $postizPgContainer pg_dump -U $pgUser -d $pgDb > $postizPgBackup 2>&1
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $postizPgBackup) -and (Get-Item $postizPgBackup).Length -gt 0) {
             $sizeMB = [math]::Round((Get-Item $postizPgBackup).Length / 1MB, 2)
-            Write-LogLine "OK" "Postiz pg dump -> $postizPgBackup ($sizeMB MB)"
+            Write-LogLine "OK" "Postiz pg_dump -> $postizPgBackup ($sizeMB MB)"
             $results += "Postiz pg: OK ($sizeMB MB)"
         } else {
-            Write-LogLine "ERR" "Postiz pg_dumpall failed"
+            Write-LogLine "ERR" "Postiz pg_dump failed (user=$pgUser db=$pgDb)"
             $results += "Postiz pg: FAIL"
         }
     } catch {
