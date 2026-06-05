@@ -141,9 +141,12 @@ tk_kill()  { _tk_req POST "$ENGINE_BASE/admin/pieces/$1/kill" \
 # --- 任务轮询（异步 job 看结果）：tk_poll <task_id> -----------------------
 tk_poll() { _tk_req GET "$ENGINE_BASE/admin/tasks/$1"; echo; }
 
-# 阻塞等到任务结束：tk_wait <task_id> [最多秒数,默认120]
+# 阻塞等到任务结束：tk_wait <task_id> [最多秒数,默认600]
+# 600s 覆盖 adapter_orchestrator（5 平台 x ~40s LLM）/ schedule_planner 等重 job；
+# MPT 短视频渲染更慢，跑 tk_video 时手动给更大：tk_wait <id> 1200。
+# 判活别只看 status：tk_poll <id> 看 log_bytes 是否在涨 = 健康，不要急着 kill。
 tk_wait() {
-  local tid="$1" max="${2:-120}" waited=0
+  local tid="$1" max="${2:-600}" waited=0
   while :; do
     local s; s="$(_tk_req GET "$ENGINE_BASE/admin/tasks/$tid" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null)"
     echo "  task $tid: $s (${waited}s)"

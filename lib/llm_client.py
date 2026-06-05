@@ -283,6 +283,22 @@ class LLMClient:
         raising ``LLMClientError``.
         """
         self._ensure_initialized()
+        # JSON generation needs a bigger token budget than free text. MiniMax
+        # M2.7 may emit a (later-stripped) <think> block before the answer, so
+        # the visible JSON can be short yet still get truncated mid-object once
+        # thinking + answer exceed max_tokens — producing errors like
+        # "Expecting ',' delimiter". Worse, the fix-retry below re-runs with the
+        # SAME ceiling, so a truncated object can never be repaired. Give
+        # complete_json its own higher, env-tunable default; an explicit
+        # caller-supplied max_tokens still wins. (Set MINIMAXI_ENABLE_THINKING=
+        # false on the engine to also suppress the thinking block at the source.)
+        if "max_tokens" not in kw:
+            try:
+                kw["max_tokens"] = max(
+                    4000, int(os.environ.get("LLM_JSON_MAX_TOKENS", "8000"))
+                )
+            except ValueError:
+                kw["max_tokens"] = 8000
         json_instruction = (
             "Respond with ONLY a valid JSON object — no markdown fences, no "
             "preamble, no trailing prose."
