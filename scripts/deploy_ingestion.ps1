@@ -28,20 +28,30 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."   # engine repo root
 
+# Native CLIs (git, docker, bash) print normal progress to stderr. Under
+# $ErrorActionPreference='Stop', PowerShell 5.1 raises a terminating
+# NativeCommandError on that stderr even when the command SUCCEEDS, and a bare
+# 2>&1 redirect does NOT suppress it. Run native commands through this helper:
+# it relaxes the preference for just that one call, echoes all output, and
+# returns the real process exit code so callers gate on the code, not stderr.
+function Invoke-Native {
+  param([Parameter(Mandatory=$true)][scriptblock]$Cmd)
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Cmd 2>&1 | ForEach-Object { Write-Host $_ } }
+  finally { $ErrorActionPreference = $old }
+  return $LASTEXITCODE
+}
+
 Write-Host "== 1/5 hard-sync to $Ref (engine host = origin mirror) =="
-# Native tools (git, docker) write normal progress to stderr. With
-# $ErrorActionPreference='Stop', PowerShell turns that stderr into a
-# terminating NativeCommandError even on success ("From github:..." tripped
-# the deploy at git fetch). Funnel each native command's streams to the host
-# as strings and gate on $LASTEXITCODE instead of letting stderr decide.
-git fetch origin 2>&1 | ForEach-Object { "$_" }
-if ($LASTEXITCODE -ne 0) { Write-Error "git fetch failed (exit=$LASTEXITCODE)"; exit 1 }
-git reset --hard $Ref 2>&1 | ForEach-Object { "$_" }
-if ($LASTEXITCODE -ne 0) { Write-Error "git reset failed (exit=$LASTEXITCODE)"; exit 1 }
+$code = Invoke-Native { git fetch origin }
+if ($code -ne 0) { Write-Error "git fetch failed (exit=$code)"; exit 1 }
+$code = Invoke-Native { git reset --hard $Ref }
+if ($code -ne 0) { Write-Error "git reset failed (exit=$code)"; exit 1 }
 
 Write-Host "== 2/5 rebuild ingestion container =="
-docker compose up -d --build $Service 2>&1 | ForEach-Object { "$_" }
-if ($LASTEXITCODE -ne 0) { Write-Error "docker build/up failed (exit=$LASTEXITCODE)"; exit 1 }
+$code = Invoke-Native { docker compose up -d --build $Service }
+if ($code -ne 0) { Write-Error "docker build/up failed (exit=$code)"; exit 1 }
 
 Write-Host "== 3/5 peek code inside the container =="
 Start-Sleep -Seconds 4
@@ -60,10 +70,8 @@ if (-not (Test-Path $bash)) { $bash = "bash" }   # fall back to bash on PATH
 
 $env:ADMIN_API_TOKEN = $token
 $env:ENGINE_BASE = $EngineBase
-# Same stderr-vs-Stop guard as steps 1/2: let smoke's stderr flow as strings
-# so $ErrorActionPreference='Stop' can't abort before we read its exit code.
-& $bash "scripts/smoke_httpfirst.sh" 2>&1 | ForEach-Object { "$_" }
-$code = $LASTEXITCODE
+# Same stderr-vs-Stop guard as steps 1/2 (smoke's curl/bash write to stderr).
+$code = Invoke-Native { & $bash "scripts/smoke_httpfirst.sh" }
 $env:ADMIN_API_TOKEN = $null   # clear after run
 
 Write-Host "== 5/5 result =="
