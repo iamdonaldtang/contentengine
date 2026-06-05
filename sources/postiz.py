@@ -274,13 +274,14 @@ class PostizClient:
         self,
         *,
         integration_id: str,
-        content: str,
+        content: str | None = None,
         scheduled_at: dt.datetime,
         media_urls: list[str] | None = None,
         post_type: str = "schedule",
         tags: list[str] | None = None,
         short_link: bool = False,
         extra_settings: dict[str, Any] | None = None,
+        thread: list[str] | None = None,
     ) -> dict[str, Any]:
         """Schedule a single platform post via Postiz Public API.
 
@@ -324,7 +325,18 @@ class PostizClient:
             raise PostizError(
                 f"create_post: integration_id must be non-empty string; got {integration_id!r}"
             )
-        if not content or not isinstance(content, str):
+        # Either a single ``content`` string OR a multi-tweet ``thread`` list
+        # (X thread: one entry per tweet → Postiz posts[0].value). When thread
+        # is given it wins; content is ignored.
+        if thread is not None:
+            if not isinstance(thread, list) or not thread or not all(
+                isinstance(t, str) and t.strip() for t in thread
+            ):
+                raise PostizError(
+                    f"create_post: thread must be a non-empty list of non-empty "
+                    f"strings; got {thread!r}"
+                )
+        elif not content or not isinstance(content, str):
             raise PostizError(f"create_post: content must be non-empty; got {content!r}")
         if not isinstance(scheduled_at, dt.datetime):
             raise PostizError(
@@ -347,6 +359,19 @@ class PostizClient:
         # POSTs from the same URL get a stable id (cheap dedup signal).
         media = [{"id": u, "path": u} for u in (media_urls or [])]
 
+        # ``value`` is Postiz's thread array — one entry per tweet. For a single
+        # post it has one entry; for an X thread it has one per pre-split tweet
+        # (each already within the account's char limit, so Postiz posts them
+        # verbatim as main + replies instead of auto-splitting a giant blob).
+        # Media attaches to the first tweet only.
+        if thread is not None:
+            value = [
+                {"content": tw, "image": media if i == 0 else []}
+                for i, tw in enumerate(thread)
+            ]
+        else:
+            value = [{"content": content, "image": media}]
+
         payload: dict[str, Any] = {
             "type": post_type,
             "shortLink": bool(short_link),
@@ -355,21 +380,17 @@ class PostizClient:
             "posts": [
                 {
                     "integration": {"id": integration_id},
-                    "value": [
-                        {
-                            "content": content,
-                            "image": media,
-                        }
-                    ],
+                    "value": value,
                     "settings": dict(extra_settings or {}),
                 }
             ],
         }
 
         logger.info(
-            "postiz.create_post: integration=%s len(content)=%d scheduled=%s media=%d",
+            "postiz.create_post: integration=%s tweets=%d total_chars=%d scheduled=%s media=%d",
             integration_id[:8] + "...",
-            len(content),
+            len(value),
+            sum(len(v["content"]) for v in value),
             iso_z,
             len(media),
         )

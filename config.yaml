@@ -73,6 +73,22 @@ postiz:
   cta_url_kind: long_url
 
   # ----------------------------------------------------------------------- #
+  # X (Twitter) account tier — drives thread splitting in schedule_planner.
+  # ----------------------------------------------------------------------- #
+  # Free X accounts cap at 280 weighted chars PER tweet; X Premium allows up to
+  # 25,000 (one long post). Premium status can't be reliably auto-detected via
+  # the browser-automation (x-browser) integration, so DECLARE it per account
+  # here (key = utm/account suffix, same keys as `accounts` above).
+  #   false → engine splits xthread_final.md into <=280-char tweets (real thread)
+  #   true  → engine keeps the author's tweets as-is (up to 25k each)
+  # The engine pre-splits at the author's `## Tweet N` boundaries either way and
+  # sends one Postiz value[] entry per tweet, so Postiz posts them verbatim
+  # instead of auto-splitting a blob at the wrong points.
+  x_premium:
+    donald_en: false        # @donaldlongsbtc — free account (280/tweet thread)
+    taskon_official: false
+
+  # ----------------------------------------------------------------------- #
   # Matrix-account cross-post routing (B3 §5.2, ship 2026-05-18 · T-08)
   # ----------------------------------------------------------------------- #
   # For each platform, the schedule_planner first publishes to the primary

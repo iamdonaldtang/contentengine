@@ -59,6 +59,7 @@ from lib.content_inject import inject_cta  # noqa: E402
 from lib.db import db  # noqa: E402
 from lib.lark import alert  # noqa: E402
 from lib.media_url import MediaUrlConfigError, sign_media_url  # noqa: E402
+from lib.x_thread_split import split_x_thread, weighted_len  # noqa: E402
 from lib.yt_metadata import YouTubeMetadata, load_or_derive  # noqa: E402
 from sources.postiz import PostizError, postiz  # noqa: E402
 
@@ -714,9 +715,14 @@ def run(
         cta_account = plan.get("account") or accounts_map.get(plat, "donald_en")
         cta_url = _pick_cta_url(utm_links, plat, cta_account, kind=cta_kind)
         cta_label = "no_cta_url"
+        # X threads keep the main post link-free and put the CTA in a trailing
+        # reply (see split_x_thread below), so DON'T inject the CTA into the
+        # X content blob here — only non-X platforms get inline injection.
+        is_x_thread = plat in ("x_thread", "x_short")
         if cta_url:
             try:
-                plan["content"] = inject_cta(plan["content"], cta_url, strict=False)
+                if not is_x_thread:
+                    plan["content"] = inject_cta(plan["content"], cta_url, strict=False)
                 if extra_settings.get("description"):
                     extra_settings["description"] = inject_cta(
                         extra_settings["description"], cta_url, strict=False,
@@ -744,6 +750,25 @@ def run(
                 )
             except Exception:
                 logger.exception("alert() emission failed")
+
+        # X (Twitter): pre-split the thread at ``## Tweet N`` boundaries into
+        # one entry per tweet so Postiz posts them verbatim (main + replies)
+        # instead of auto-splitting a 2.7k blob at the wrong points. Free
+        # accounts cap each tweet at 280 weighted chars; Premium at 25k —
+        # declared per account in config.yaml postiz.x_premium. The CTA URL is
+        # appended as its own trailing reply (主推无外链).
+        x_tweets: list[str] | None = None
+        if is_x_thread:
+            x_premium = bool((postiz_cfg.get("x_premium") or {}).get(cta_account, False))
+            x_tweets = split_x_thread(
+                plan["content"], premium=x_premium,
+                cta_url=cta_url if cta_url else None,
+            )
+            logger.info(
+                "x_thread split: piece=%s account=%s premium=%s tweets=%d weighted_lens=%s",
+                piece_id, cta_account, x_premium, len(x_tweets),
+                [weighted_len(t) for t in x_tweets],
+            )
 
         if dry_run:
             logger.info(
@@ -774,13 +799,23 @@ def run(
             continue
 
         try:
-            resp = postiz.create_post(
-                integration_id=plan["integration_id"],
-                content=plan["content"],
-                scheduled_at=plan["scheduled_at"],
-                media_urls=media_urls,
-                extra_settings=extra_settings or None,
-            )
+            if x_tweets is not None:
+                # X thread: send the pre-split tweets as Postiz's value array.
+                resp = postiz.create_post(
+                    integration_id=plan["integration_id"],
+                    scheduled_at=plan["scheduled_at"],
+                    media_urls=media_urls,
+                    extra_settings=extra_settings or None,
+                    thread=x_tweets,
+                )
+            else:
+                resp = postiz.create_post(
+                    integration_id=plan["integration_id"],
+                    content=plan["content"],
+                    scheduled_at=plan["scheduled_at"],
+                    media_urls=media_urls,
+                    extra_settings=extra_settings or None,
+                )
             pub_id = _persist_publishing(piece_id, plan, resp)
             scheduled += 1
             results.append({
