@@ -651,6 +651,16 @@ def run(
                 logger.exception("yt_metadata load_or_derive failed for %s: %s", piece_id, exc)
                 yt_meta_label = f"yt_meta=ERR ({type(exc).__name__})"
 
+        # X (Twitter via Postiz) REQUIRES settings.who_can_reply_post, else the
+        # Postiz Public API rejects the post with HTTP 400
+        # ("must be one of: everyone, following, mentionedUsers, subscribers,
+        # verified"). Default to "everyone" for max reach; override per-deploy
+        # via config.yaml postiz.x_who_can_reply.
+        if plat in ("x_thread", "x_short"):
+            extra_settings["who_can_reply_post"] = (
+                postiz_cfg.get("x_who_can_reply") or "everyone"
+            )
+
         # Video platforms need a media URL Postiz can fetch. Without it, the
         # YouTube provider crashes with "TypeError: Invalid URL". We sign a
         # short-lived URL on the existing cloudflared tunnel so Postiz can
