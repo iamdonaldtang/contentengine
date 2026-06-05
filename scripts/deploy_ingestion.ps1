@@ -29,11 +29,19 @@ $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."   # engine repo root
 
 Write-Host "== 1/5 hard-sync to $Ref (engine host = origin mirror) =="
-git fetch origin
-git reset --hard $Ref
+# Native tools (git, docker) write normal progress to stderr. With
+# $ErrorActionPreference='Stop', PowerShell turns that stderr into a
+# terminating NativeCommandError even on success ("From github:..." tripped
+# the deploy at git fetch). Funnel each native command's streams to the host
+# as strings and gate on $LASTEXITCODE instead of letting stderr decide.
+git fetch origin 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE -ne 0) { Write-Error "git fetch failed (exit=$LASTEXITCODE)"; exit 1 }
+git reset --hard $Ref 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE -ne 0) { Write-Error "git reset failed (exit=$LASTEXITCODE)"; exit 1 }
 
 Write-Host "== 2/5 rebuild ingestion container =="
-docker compose up -d --build $Service
+docker compose up -d --build $Service 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE -ne 0) { Write-Error "docker build/up failed (exit=$LASTEXITCODE)"; exit 1 }
 
 Write-Host "== 3/5 peek code inside the container =="
 Start-Sleep -Seconds 4
@@ -52,7 +60,9 @@ if (-not (Test-Path $bash)) { $bash = "bash" }   # fall back to bash on PATH
 
 $env:ADMIN_API_TOKEN = $token
 $env:ENGINE_BASE = $EngineBase
-& $bash "scripts/smoke_httpfirst.sh"
+# Same stderr-vs-Stop guard as steps 1/2: let smoke's stderr flow as strings
+# so $ErrorActionPreference='Stop' can't abort before we read its exit code.
+& $bash "scripts/smoke_httpfirst.sh" 2>&1 | ForEach-Object { "$_" }
 $code = $LASTEXITCODE
 $env:ADMIN_API_TOKEN = $null   # clear after run
 
