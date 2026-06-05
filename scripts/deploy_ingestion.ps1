@@ -60,19 +60,20 @@ try {
   Write-Host "  container admin_routes: $probe (informational; smoke is the gate)"
 } catch { Write-Host "  (in-container probe skipped)" }
 
-Write-Host "== 4/5 end-to-end smoke (mandatory gate) =="
+Write-Host "== 4/5 end-to-end smoke (mandatory gate, runs INSIDE the container) =="
 $tokenLine = Select-String -Path .env -Pattern '^ADMIN_API_TOKEN=' | Select-Object -First 1
 if (-not $tokenLine) { Write-Error ".env missing ADMIN_API_TOKEN, cannot smoke"; exit 1 }
 $token = ($tokenLine.Line -replace '^ADMIN_API_TOKEN=', '').Trim()
 
-$bash = Join-Path $env:ProgramFiles "Git\bin\bash.exe"
-if (-not (Test-Path $bash)) { $bash = "bash" }   # fall back to bash on PATH
-
-$env:ADMIN_API_TOKEN = $token
-$env:ENGINE_BASE = $EngineBase
-# Same stderr-vs-Stop guard as steps 1/2 (smoke's curl/bash write to stderr).
-$code = Invoke-Native { & $bash "scripts/smoke_httpfirst.sh" }
-$env:ADMIN_API_TOKEN = $null   # clear after run
+# Run the smoke INSIDE the ingestion container, not host Git-bash. The engine
+# host's MINGW bash has no python3, so every python3-based assertion (postiz
+# health, state read, job task_id, the PNG fixture) false-failed 5/14 even
+# though the engine was green (verified 14/14 from a python3 box). The image
+# ships python3.12 + curl + bash, so this gates on the real service rather than
+# host tooling. ENGINE_BASE stays the public URL to also prove public path+auth.
+$code = Invoke-Native {
+  docker compose exec -T -e ADMIN_API_TOKEN=$token -e ENGINE_BASE=$EngineBase $Service bash scripts/smoke_httpfirst.sh
+}
 
 Write-Host "== 5/5 result =="
 if ($code -ne 0) {
