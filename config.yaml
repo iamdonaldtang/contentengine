@@ -31,17 +31,16 @@ postiz:
   #   jobs/schedule_planner    → reads same keys
   #   publishings.platform     → stored verbatim
   integrations:
-    # Wave 1: 2 platforms connected 2026-05-15.
-    # Pull current UUIDs anytime:
-    #   docker compose exec engine python -c "from sources.postiz import postiz; \
-    #     [print(f\"{i['identifier']:12} {i['id']} {i['name']}\") for i in postiz.list_integrations() if not i.get('disabled')]"
-    x_thread: ""                                 # X (Twitter) — pending OAuth
+    # Connected integrations (3 as of 2026-06-05: linkedin, youtube, x).
+    # Pull current UUIDs anytime — PowerShell-safe via stdin (run on engine host):
+    #   'from sources.postiz import postiz; [print(i["identifier"], i["id"], i["name"]) for i in postiz.list_integrations()]' | docker compose exec -T engine python -
+    x_thread: "cmp6pg3jj0001n57c0j34jevs"        # X · @donaldlongsbtc (Postiz identifier=x-browser) · wired 2026-06-05
     linkedin_post: "cmp6765x60001ox9a49xf585o"   # LinkedIn · Donald Tang
     linkedin_carousel: "cmp6765x60001ox9a49xf585o"  # same LinkedIn account, PDF carousel
     medium_long: ""                              # Medium — pending Integration Token
     yt_shorts: "cmp6azvuh0004n58e848712dx"       # YouTube · donaldtang
     tiktok: ""                                   # TikTok — pending Developer approval
-    x_short: ""                                  # = x_thread when connected
+    x_short: "cmp6pg3jj0001n57c0j34jevs"         # = x_thread (same X account @donaldlongsbtc)
 
   # ----------------------------------------------------------------------- #
   # CTA URL account selection · platform → utm_links.json account suffix

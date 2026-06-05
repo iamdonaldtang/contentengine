@@ -71,8 +71,15 @@ $token = ($tokenLine.Line -replace '^ADMIN_API_TOKEN=', '').Trim()
 # though the engine was green (verified 14/14 from a python3 box). The image
 # ships python3.12 + curl + bash, so this gates on the real service rather than
 # host tooling. ENGINE_BASE stays the public URL to also prove public path+auth.
+# Strip any CRLF from the shell scripts INSIDE the container right before
+# running. The engine host's git (autocrlf) checks *.sh out as CRLF, and a
+# `git reset --hard` will NOT re-normalize a working file whose blob is
+# unchanged, so .gitattributes alone can't fix an already-CRLF tree. The Linux
+# bash in the image then dies on the trailing \r ("set: pipefail: invalid
+# option", "case ... in\r"). sed makes the gate immune regardless of checkout
+# EOL. Container is ephemeral (rebuilt every deploy), so editing in place is safe.
 $code = Invoke-Native {
-  docker compose exec -T -e ADMIN_API_TOKEN=$token -e ENGINE_BASE=$EngineBase $Service bash scripts/smoke_httpfirst.sh
+  docker compose exec -T -e ADMIN_API_TOKEN=$token -e ENGINE_BASE=$EngineBase $Service bash -c 'sed -i "s/\r$//" scripts/smoke_httpfirst.sh scripts/tk.sh && bash scripts/smoke_httpfirst.sh'
 }
 
 Write-Host "== 5/5 result =="
