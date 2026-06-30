@@ -34,6 +34,10 @@ RUN apt-get update \
         tzdata \
         sqlite3 \
         tini \
+        libcairo2 \
+        librsvg2-bin \
+        fonts-noto-cjk \
+        fontconfig \
  && ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo "${TZ}" > /etc/timezone \
  && rm -rf /var/lib/apt/lists/*
@@ -73,6 +77,14 @@ COPY docker/     /app/docker/
 # even though the gunicorn HTTP server itself runs in the separate ingestion service.
 COPY ingestion/  /app/ingestion/
 COPY pyproject.toml requirements.txt config.yaml README.md /app/
+
+# ---- Visual assets (SVG templates + bundled brand/CJK fonts) ----
+COPY assets/     /app/assets/
+# Register any bundled brand/CJK font files with fontconfig so cairosvg/Pillow
+# resolve them by family name (system fonts-noto-cjk already covers Chinese).
+RUN mkdir -p /usr/share/fonts/taskon \
+ && ( cp -f /app/assets/fonts/* /usr/share/fonts/taskon/ 2>/dev/null || true ) \
+ && fc-cache -f
 
 # ---- Permissions ----
 RUN mkdir -p /app/runtime/logs /app/runtime/drafts /app/runtime/backups \

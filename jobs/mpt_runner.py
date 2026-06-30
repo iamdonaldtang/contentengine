@@ -58,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.db import db  # noqa: E402
 from lib.lark import alert  # noqa: E402
+from lib.pipeline_flags import resolve_stages  # noqa: E402
 from sources.mpt import DEFAULT_RESOLUTION, DEFAULT_VOICE, MPTError, mpt  # noqa: E402
 
 
@@ -87,6 +88,53 @@ def _drafts_dir() -> Path:
 
 def _piece_dir(piece_id: str) -> Path:
     return _drafts_dir() / piece_id
+
+
+# --------------------------------------------------------------------------- #
+# Local-material (no-GPU 档1) opt-in
+# --------------------------------------------------------------------------- #
+#
+# DEFAULT OFF. When env MPT_LOCAL_MATERIALS is truthy AND a piece has storyboard
+# card images on disk, mpt_runner feeds those as MPT's video materials instead of
+# Pexels search (visual_runner / manual drop produces them). Requires the
+# engine-host MPT fork to honour video_source=local; on stock MPT these body
+# fields are ignored, so flipping the env on a non-fork host is a safe no-op.
+# Per-piece control can be layered on later; one global env keeps the working
+# Pexels path byte-for-byte unchanged until deliberately switched on.
+
+_LOCAL_MAT_ENV = "MPT_LOCAL_MATERIALS"
+_LOCAL_TRUE = {"1", "true", "yes", "on", "enable", "enabled"}
+
+
+def _local_materials_enabled() -> bool:
+    return os.environ.get(_LOCAL_MAT_ENV, "").strip().lower() in _LOCAL_TRUE
+
+
+def _collect_storyboard(piece_dir: Path) -> list[str]:
+    """Return sorted storyboard image paths for local-material rendering.
+
+    Prefers a dedicated ``storyboard/`` subdir; falls back to visual_runner's
+    ``carousel_pNN.png`` pages. Empty list = nothing to feed (caller keeps Pexels).
+    """
+    sb = piece_dir / "storyboard"
+    if sb.is_dir():
+        imgs = sorted(sb.glob("*.png")) + sorted(sb.glob("*.jpg"))
+        if imgs:
+            return [str(p) for p in imgs]
+    pages = sorted(piece_dir.glob("carousel_p*.png"))
+    return [str(p) for p in pages]
+
+
+def _maybe_local_materials(piece_dir: Path) -> dict[str, Any]:
+    """Build the local-material submit kwargs, or {} to keep the Pexels default."""
+    if not _local_materials_enabled():
+        return {}
+    mats = _collect_storyboard(piece_dir)
+    if not mats:
+        logger.info("MPT_LOCAL_MATERIALS on but no storyboard/carousel images in %s - keeping Pexels", piece_dir)
+        return {}
+    logger.info("mpt_runner: using %d local storyboard materials (video_source=local)", len(mats))
+    return {"video_source": "local", "video_materials": mats, "concat_mode": "sequential"}
 
 
 # --------------------------------------------------------------------------- #
@@ -158,6 +206,7 @@ def run(
     dry_run: bool = False,
     force: bool = False,
     script_filename: str = "shorts_60s.md",
+    video: Any = None,
 ) -> dict[str, Any]:
     """Submit a render task to MPT and return immediately.
 
@@ -173,6 +222,20 @@ def run(
         failed            — submit POST raised; row marked failed
     """
     started_at = time.monotonic()
+
+    # ---- Pipeline stage gate ---- #
+    # Honour the video stage flag (global config / per-piece selection_card /
+    # runtime override). When OFF, do not render even if called directly --
+    # saves the ~60s MPT render + Pexels/TTS round-trip. A runtime ``video``
+    # override can force it back on. See lib/pipeline_flags.resolve_stages.
+    stages = resolve_stages(piece_id, video_override=video)
+    if not stages.video:
+        logger.info(
+            "video stage disabled for piece=%s (%s) - skipping MPT render",
+            piece_id, stages.summary(),
+        )
+        return {"piece_id": piece_id, "status": "skipped", "reason": "video_stage_disabled"}
+
     piece_dir = _piece_dir(piece_id)
     script_path = piece_dir / script_filename
 
@@ -258,6 +321,7 @@ def run(
     logger.debug("mpt_runner: created mpt_tasks row_id=%d piece=%s", row_id, piece_id)
 
     # ---- Submit to MPT with callback ---- #
+    local_kwargs = _maybe_local_materials(piece_dir)
     try:
         task_id = mpt.submit_video(
             narration,
@@ -265,6 +329,7 @@ def run(
             resolution=resolution,
             callback_url=callback_url,
             callback_secret=callback_secret,
+            **local_kwargs,
         )
     except MPTError as exc:
         logger.exception("MPT submit failed for piece=%s: %s", piece_id, exc)
@@ -345,6 +410,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--resolution", default=DEFAULT_RESOLUTION, help=f"WxH (default {DEFAULT_RESOLUTION})")
     p.add_argument("--dry-run", action="store_true", help="validate inputs + env; don't call MPT or write DB")
     p.add_argument("--force", action="store_true", help="bypass in-flight idempotency check (re-submit even if pending row exists)")
+    p.add_argument("--video", default=None, help="override video stage (on/off/yes/no). off = skip render")
     p.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"))
     return p.parse_args(argv)
 
@@ -361,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         resolution=args.resolution,
         dry_run=args.dry_run,
         force=args.force,
+        video=args.video,
     )
     status = summary.get("status")
     if status in ("submitted", "dry_run", "skipped", "already_in_flight"):

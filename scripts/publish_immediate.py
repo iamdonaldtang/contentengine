@@ -70,6 +70,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Don't call Postiz, print plan only.",
     )
     parser.add_argument(
+        "--video", default=None,
+        help="口令: override video stage (on/off). Forwarded to schedule_planner.run().",
+    )
+    parser.add_argument(
+        "--cta", default=None,
+        help="口令: override CTA stage (on/off). off = publish link-free, no UTM required.",
+    )
+    parser.add_argument(
+        "--visual", default=None,
+        help="口令: override visual stage (on/off). off = publish without rendered image.",
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
     )
     args = parser.parse_args(argv)
@@ -115,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = _real_run(
             piece_id=args.piece_id,
             dry_run=args.dry_run,
+            video=args.video,
+            cta=args.cta,
+            visual=args.visual,
         )
     finally:
         # Restore in case anything else in the same process needs the originals.

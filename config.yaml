@@ -1,6 +1,29 @@
 # TaskOn Marketing Engine · Non-secret configuration
 # Secrets live in .env. This file is checked into git.
 
+# --------------------------------------------------------------------------- #
+# Pipeline stage switches (global) · 2026-06-24
+# --------------------------------------------------------------------------- #
+# Two optional stages can be turned off pipeline-wide here. A single piece can
+# override either value via its selection_card.yaml ``stages:`` block, or at
+# run time via the job 口令 (--video / --cta CLI flag, or payload.video/cta).
+# Precedence: 运行时口令 > selection_card.yaml stages: > 这里(全局) > 默认 true.
+#
+#   video — step 7 mpt_runner (renders shorts_60s.mp4) + video-platform
+#           publishing (yt_shorts / yt_long / tiktok). off = no render, those
+#           platforms are skipped cleanly.
+#   cta   — step 8 utm_generator (utm_links.json + l.taskon.xyz short links) +
+#           CTA-URL injection. off = utm not generated/required, posts publish
+#           link-free, {{CTA_URL}} placeholder stripped, no attribution P2.
+#
+# Resolver: lib/pipeline_flags.resolve_stages(). Both true = current behaviour.
+pipeline_stages:
+  video: true
+  cta: true
+  visual: true       # 配图引擎（CPU·无 GPU）：x_hero / carousel / yt_thumb
+  avatar: false      # 数字人口播（需云 GPU）· 本阶段占位不跑
+  longform: false    # 长视频（需云 GPU）· 本阶段占位不跑
+
 llm:
   primary: minimaxi
   fallback: anthropic

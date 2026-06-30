@@ -191,6 +191,9 @@ class MPTClient:
         extra_params: dict[str, Any] | None = None,
         callback_url: str | None = None,
         callback_secret: str | None = None,
+        video_source: str | None = None,
+        video_materials: list[str] | None = None,
+        concat_mode: str | None = None,
     ) -> str:
         """Create a new MPT task.
 
@@ -216,6 +219,18 @@ class MPTClient:
             callback_secret: Shared secret for the HMAC-SHA256 signature MPT
                 attaches to the callback POST. Engine verifies via the same
                 secret. Must be paired with ``callback_url`` (XOR rejected).
+
+            video_source: Material source. ``None`` (default) keeps MPT's stock
+                behaviour (Pexels keyword search). ``"local"`` tells the MPT
+                fork to use ``video_materials`` instead of searching Pexels --
+                this is the no-GPU 档1 path that feeds visual_runner storyboard
+                cards as the video frames (requires the engine-host MPT fork to
+                support local materials; harmless no-op on stock MPT).
+            video_materials: Absolute local file paths (storyboard card images /
+                clips) used when ``video_source="local"``. Order preserved.
+            concat_mode: Material concatenation mode, e.g. ``"sequential"``
+                (path A) -- forwarded as ``video_concat_mode``. ``None`` keeps
+                the MPT default.
 
         Returns:
             The MPT task_id (string).
@@ -245,6 +260,15 @@ class MPTClient:
                 f"got: {callback_url[:60]!r}"
             )
 
+        # Local-material path is opt-in and must be internally consistent: a
+        # "local" source with no materials would make the MPT fork silently fall
+        # back to Pexels -- the exact ambiguity we refuse (Prompt §7 no silent).
+        if video_source == "local" and not video_materials:
+            raise MPTError(
+                "submit_video: video_source='local' requires non-empty "
+                "video_materials (storyboard card paths)"
+            )
+
         subj = subject or script.strip().splitlines()[0][:80]
         body: dict[str, Any] = {
             "video_subject": subj,
@@ -256,6 +280,14 @@ class MPTClient:
         }
         if extra_params:
             body.update(extra_params)
+        # Local-material knobs (档1 no-GPU). Only added when explicitly provided,
+        # so the default Pexels submit body is byte-for-byte unchanged.
+        if video_source:
+            body["video_source"] = video_source
+        if video_materials:
+            body["video_materials"] = list(video_materials)
+        if concat_mode:
+            body["video_concat_mode"] = concat_mode
         if callback_url and callback_secret:
             body["callback_url"] = callback_url
             body["callback_secret"] = callback_secret

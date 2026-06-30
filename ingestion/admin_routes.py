@@ -202,7 +202,8 @@ def admin_run_publish() -> tuple[Response, int]:
       hook_type       (optional, default "default")
       offset_minutes  (optional, default 10)
       platforms       (optional, default "linkedin_post,yt_shorts")
-      skip_mpt        (optional bool, default false) — skip MPT step if piece has no shorts_60s.md
+      skip_mpt        (optional bool, default false) — skip MPT render + video platforms (video stage off)
+      skip_cta        (optional bool, default false) — skip UTM gen; publish link-free (cta stage off)
 
     Response 202: {status: accepted, task_id, poll_url}
     """
@@ -217,6 +218,7 @@ def admin_run_publish() -> tuple[Response, int]:
     offset_minutes = int(payload.get("offset_minutes", 10))
     platforms = (payload.get("platforms") or "linkedin_post,yt_shorts").strip()
     skip_mpt = bool(payload.get("skip_mpt", False))
+    skip_cta = bool(payload.get("skip_cta", False))
 
     # Validate inputs (defense against path / shell injection)
     if not _PIECE_ID_RE.match(piece_id):
@@ -259,13 +261,15 @@ def admin_run_publish() -> tuple[Response, int]:
         "echo ''\n"
         "echo '[1/3] utm_generator...'\n"
         f"python -m jobs.utm_generator --piece-id {piece_id} --target-url '{target_url}' "
-        f"--platforms twitter,linkedin,youtube --accounts donald_en,taskon_official --hook-type {hook_type}\n"
+        f"--platforms twitter,linkedin,youtube --accounts donald_en,taskon_official --hook-type {hook_type}"
+        f"{' --cta off' if skip_cta else ''}\n"
         "echo ''\n"
         f"{mpt_step}\n"
         "echo ''\n"
         "echo '[3/3] publish_immediate...'\n"
         f"python -m scripts.publish_immediate --piece-id {piece_id} "
-        f"--platforms {platforms} --offset-minutes {offset_minutes}\n"
+        f"--platforms {platforms} --offset-minutes {offset_minutes}"
+        f"{' --video off' if skip_mpt else ''}{' --cta off' if skip_cta else ''}\n"
         "echo ''\n"
         "echo '=== done ==='\n"
     )
@@ -498,6 +502,21 @@ _HOOK_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 _VOICE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]{1,40}$")
 _KOL_RE = re.compile(r"^@?[A-Za-z0-9_]{1,30}$")
 _KIND_RE = re.compile(r"^[a-z_]{1,20}$")
+# Pipeline-stage override values (video / cta). Accept the same truthy/falsey
+# tokens lib.pipeline_flags.parse_flag understands; reject anything else.
+_STAGE_FLAG_RE = re.compile(r"^(on|off|true|false|yes|no|y|n|1|0|enable|enabled|disable|disabled)$")
+
+
+def _stage_flag_argv(payload: "dict[str, Any]", key: str):
+    """Return ["--<key>", value] for a valid stage flag, [] if unset, or False
+    if the value is present but invalid (caller should 400)."""
+    raw = payload.get(key)
+    if raw is None:
+        return []
+    val = str(raw).strip().lower()
+    if not _STAGE_FLAG_RE.match(val):
+        return False
+    return [f"--{key}", val]
 
 
 def _safe_piece_dir(piece_id: str) -> Path | None:
@@ -636,7 +655,8 @@ def admin_list_draft(piece_id: str) -> tuple[Response, int]:
 
 _ALLOWED_JOBS = {
     "adapter_orchestrator", "voice_checker", "custom_slice_generator",
-    "mpt_runner", "utm_generator", "schedule_planner", "kol_relation_tracker",
+    "mpt_runner", "visual_runner", "utm_generator", "schedule_planner",
+    "kol_relation_tracker", "promotion_scanner",
 }
 
 
@@ -693,6 +713,24 @@ def _job_argv(job: str, payload: dict[str, Any]) -> list[str] | None:
         argv = ["python", "-m", "jobs.mpt_runner", "--piece-id", pid, "--voice", voice]
         if bool(payload.get("force", False)):
             argv.append("--force")
+        ext = _stage_flag_argv(payload, "video")
+        if ext is False:
+            return None
+        argv += ext
+        return argv
+
+    if job == "visual_runner":
+        if not pid_ok:
+            return None
+        argv = ["python", "-m", "jobs.visual_runner", "--piece-id", pid]
+        if bool(payload.get("dry_run", False)):
+            argv.append("--dry-run")
+        if bool(payload.get("force", False)):
+            argv.append("--force")
+        ext = _stage_flag_argv(payload, "visual")
+        if ext is False:
+            return None
+        argv += ext
         return argv
 
     if job == "utm_generator":
@@ -710,9 +748,14 @@ def _job_argv(job: str, payload: dict[str, Any]) -> list[str] | None:
         hook = (payload.get("hook_type") or "default").strip()
         if not _HOOK_RE.match(hook):
             return None
-        return ["python", "-m", "jobs.utm_generator", "--piece-id", pid,
+        argv = ["python", "-m", "jobs.utm_generator", "--piece-id", pid,
                 "--target-url", target, "--platforms", platforms,
                 "--accounts", accounts, "--hook-type", hook]
+        ext = _stage_flag_argv(payload, "cta")
+        if ext is False:
+            return None
+        argv += ext
+        return argv
 
     if job == "schedule_planner":
         if not pid_ok:
@@ -720,6 +763,38 @@ def _job_argv(job: str, payload: dict[str, Any]) -> list[str] | None:
         argv = ["python", "-m", "jobs.schedule_planner", "--piece-id", pid]
         if bool(payload.get("dry_run", False)):
             argv.append("--dry-run")
+        for flag in ("video", "cta", "visual"):
+            ext = _stage_flag_argv(payload, flag)
+            if ext is False:
+                return None
+            argv += ext
+        return argv
+
+    if job == "promotion_scanner":
+        argv = ["python", "-m", "jobs.promotion_scanner"]
+        days = payload.get("days")
+        if days is not None:
+            if not isinstance(days, int) or not (1 <= days <= 90):
+                return None
+            argv += ["--days", str(days)]
+        top_pct = payload.get("top_pct")
+        if top_pct is not None:
+            try:
+                tp = float(top_pct)
+            except (TypeError, ValueError):
+                return None
+            if not (0.0 < tp < 1.0):
+                return None
+            argv += ["--top-pct", str(tp)]
+        mi = payload.get("min_impressions")
+        if mi is not None:
+            if not isinstance(mi, int) or mi < 0:
+                return None
+            argv += ["--min-impressions", str(mi)]
+        if bool(payload.get("dry_run", False)):
+            argv.append("--dry-run")
+        if bool(payload.get("force", False)):
+            argv.append("--force")
         return argv
 
     if job == "kol_relation_tracker":

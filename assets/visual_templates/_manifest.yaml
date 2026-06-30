@@ -1,0 +1,21 @@
+# Visual template manifest -- consumed by jobs/visual_runner.py.
+# Each media output maps to a template + canvas. style alternatives can be
+# chosen per-piece later (selection_card visual.style); default listed first.
+media:
+  x_hero:
+    size: [1600, 900]
+    templates: [quote_landscape.svg, data_landscape.svg]
+  yt_thumb:
+    size: [1280, 720]            # rendered from quote_landscape (16:9), scaled
+    templates: [quote_landscape.svg]
+  carousel:
+    size: [1080, 1350]
+    templates: [quote_portrait.svg]
+placeholders:
+  common: [TITLE, SUBTITLE, TAG, BRAND]
+  data_landscape: [TITLE, TAG, BRAND, STAT1, STAT1_LABEL, STAT2, STAT2_LABEL]
+  carousel: [TITLE, SUBTITLE, TAG, BRAND, PAGE]
+brand_defaults:
+  BRAND: "TaskOn.xyz"
+  # 🔴 拍板①: 品牌色/字体/logo 待 Donald 确认；当前 crypto 暗色霓虹占位。
+notes: "MVP 2 styles (quote/data). 矛盾揭露/步骤清单/案例 templates TODO after 拍板①."

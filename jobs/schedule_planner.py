@@ -55,8 +55,9 @@ load_dotenv(override=False)
 # Make `python jobs/schedule_planner.py` work as well as `-m jobs.schedule_planner`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.content_inject import inject_cta  # noqa: E402
+from lib.content_inject import inject_cta, strip_cta  # noqa: E402
 from lib.db import db  # noqa: E402
+from lib.pipeline_flags import Stages, resolve_stages  # noqa: E402
 from lib.lark import alert  # noqa: E402
 from lib.media_url import MediaUrlConfigError, sign_media_url  # noqa: E402
 from lib.x_thread_split import split_x_thread, weighted_len  # noqa: E402
@@ -128,6 +129,24 @@ def _pick_cta_url(
 # "TypeError: Invalid URL" (verified 2026-05-16 piece-02 S9.5).
 _VIDEO_PLATFORMS: frozenset[str] = frozenset({"yt_shorts", "yt_long", "tiktok"})
 _VIDEO_MEDIA_FILENAME = "shorts_60s.mp4"
+
+# Platforms that attach a rendered still/carousel image produced by the visual
+# stage (jobs/visual_runner). Maps engine platform key -> output filename under
+# runtime/drafts/<piece_id>/. An image is only attached when the platform did
+# NOT already get a video media_url (so the working YouTube/TikTok mp4 path is
+# never disturbed) and only when stages.visual is on. Missing image is non-fatal:
+# the platform publishes text-only with a P2 alert.
+# 2026-06-30. (yt_shorts maps yt_thumb.png but is skipped while its mp4 media is
+# present -- the still is rendered for manual/future use, not pushed to Shorts.)
+# RED FLAG pai-ban-2: carousel as PDF vs PNG sequence -- if Postiz LinkedIn
+# rejects PDF document upload, switch "linkedin_carousel" to "carousel_p01.png".
+_IMAGE_MEDIA: dict[str, str] = {
+    "x_thread": "x_hero.png",
+    "x_short": "x_hero.png",
+    "linkedin_carousel": "carousel.pdf",
+    "linkedin_post": "x_hero.png",
+    "yt_shorts": "yt_thumb.png",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +352,7 @@ def build_schedule(
     base_monday: dt.date | None = None,
     cfg: dict[str, Any] | None = None,
     now_local: dt.datetime | None = None,
+    stages: Stages | None = None,
 ) -> list[dict[str, Any]]:
     """Return one plan dict per platform with content + scheduled_at + UTM.
 
@@ -350,6 +370,8 @@ def build_schedule(
             is not supplied.
     """
     cfg = cfg or _load_config()
+    if stages is None:
+        stages = resolve_stages(piece_id, cfg=cfg, drafts_dir=_drafts_dir())
     sp_cfg = cfg.get("schedule_planner") or {}
     postiz_cfg = cfg.get("postiz") or {}
     integrations: dict[str, str] = postiz_cfg.get("integrations") or {}
@@ -403,9 +425,15 @@ def build_schedule(
             "utm_campaign": None, "utm_content": None, "utm_term": None,
         }
 
-        # Skip reasons (preserve order: missing utm is more critical than missing draft)
+        # Skip reasons. Order = severity:
+        #   1) video stage off → video platforms skipped (no mp4 will exist)
+        #   2) cta stage ON but utm missing → mandatory-UTM gate (B1 §4)
+        #      (when cta stage is OFF, missing utm_links is EXPECTED, not fatal)
+        #   3) draft missing  4) integration not configured
         skip_reason: str | None = None
-        if utm_links is None:
+        if not stages.video and platform_key in _VIDEO_PLATFORMS:
+            skip_reason = "video stage disabled (pipeline_stages.video=off)"
+        elif stages.cta and utm_links is None:
             skip_reason = "utm_links.json missing — UTM is mandatory (B1 §4)"
         elif content is None:
             skip_reason = f"draft missing: {fname}"
@@ -470,7 +498,9 @@ def build_schedule(
                 "utm_campaign": None, "utm_content": None, "utm_term": None,
             }
             cp_skip: str | None = None
-            if utm_links is None:
+            if not stages.video and platform_key in _VIDEO_PLATFORMS:
+                cp_skip = "video stage disabled (pipeline_stages.video=off)"
+            elif stages.cta and utm_links is None:
                 cp_skip = "utm_links.json missing — UTM is mandatory (B1 §4)"
             elif content is None:
                 cp_skip = f"draft missing: {fname}"
@@ -591,6 +621,9 @@ def run(
     *,
     dry_run: bool = False,
     base_monday: dt.date | None = None,
+    video: Any = None,
+    cta: Any = None,
+    visual: Any = None,
 ) -> dict[str, Any]:
     """Plan + schedule one piece across every configured platform.
 
@@ -598,17 +631,25 @@ def run(
         piece_id: Folder name under ``runtime/drafts/``.
         dry_run: When True, print the plan and DO NOT call Postiz / write DB.
         base_monday: Override anchor for deterministic testing.
+        video: Runtime 口令 overriding the ``video`` stage flag (on/off/yes/no/
+            bool). None = fall through to selection_card / config / default.
+        cta: Runtime 口令 overriding the ``cta`` stage flag (same forms).
 
     Returns:
         Summary dict (planned/scheduled/skipped counts, per-platform results).
     """
     started_at = time.monotonic()
     cfg = _load_config()
+    stages = resolve_stages(
+        piece_id, cfg=cfg, drafts_dir=_drafts_dir(),
+        video_override=video, cta_override=cta, visual_override=visual,
+    )
+    logger.info("schedule_planner stages · piece=%s · %s", piece_id, stages.summary())
 
     if not dry_run:
         _ensure_piece_in_db(piece_id)
 
-    plans = build_schedule(piece_id, base_monday=base_monday, cfg=cfg)
+    plans = build_schedule(piece_id, base_monday=base_monday, cfg=cfg, stages=stages)
     scheduled = 0
     skipped = 0
     failures = 0
@@ -704,6 +745,46 @@ def run(
                     logger.exception("alert() emission failed")
                 continue
 
+        # ───── Image media (visual stage) ──────────────────────────────── #
+        # Attach a rendered still/carousel for platforms that publish an image.
+        # Only when this platform did not already get a video media_url above,
+        # so the YouTube/TikTok mp4 path is never disturbed. Missing image =
+        # P2 alert + publish text-only (never block the post).
+        if media_urls is None and stages.visual:
+            image_fname = _IMAGE_MEDIA.get(plat)
+            if image_fname:
+                img_path = _drafts_dir() / piece_id / image_fname
+                if img_path.is_file():
+                    try:
+                        media_urls = [sign_media_url(piece_id, image_fname)]
+                        logger.info("attached image media %s for piece=%s/%s", image_fname, piece_id, plat)
+                    except (MediaUrlConfigError, ValueError) as exc:
+                        logger.warning(
+                            "image media sign failed for %s/%s: %s — publishing text-only",
+                            piece_id, plat, exc,
+                        )
+                        try:
+                            alert(
+                                "P2",
+                                f"schedule_planner: image media sign failed {piece_id}/{plat}",
+                                {"error": str(exc)[:200]},
+                            )
+                        except Exception:
+                            logger.exception("alert() emission failed")
+                else:
+                    logger.info(
+                        "no image product %s for piece=%s/%s — publishing text-only",
+                        image_fname, piece_id, plat,
+                    )
+                    try:
+                        alert(
+                            "P2",
+                            f"schedule_planner: missing image {image_fname} for {piece_id}/{plat} (text-only)",
+                            {"piece_id": piece_id, "platform": plat},
+                        )
+                    except Exception:
+                        logger.exception("alert() emission failed")
+
         # ───── CTA URL injection ─────────────────────────────────────────── #
         # Replace ``{{CTA_URL}}`` placeholder in the platform content (+ the
         # LLM-derived YouTube description) with the long/short URL bound to
@@ -712,44 +793,62 @@ def run(
         # WARN so the author notices for next piece. 2026-05-16 introduction.
         # T-08 (2026-05-18): account now comes from the plan itself, not the
         # platform-level accounts_map, so cross_post plans get their own CTA.
-        cta_account = plan.get("account") or accounts_map.get(plat, "donald_en")
-        cta_url = _pick_cta_url(utm_links, plat, cta_account, kind=cta_kind)
-        cta_label = "no_cta_url"
-        # X threads keep the main post link-free and put the CTA in a trailing
-        # reply (see split_x_thread below), so DON'T inject the CTA into the
-        # X content blob here — only non-X platforms get inline injection.
         is_x_thread = plat in ("x_thread", "x_short")
-        if cta_url:
+
+        # CTA stage OFF → publish link-free. Strip the {{CTA_URL}} placeholder
+        # from content + YT description so no dangling arrow remains, force
+        # cta_url to None (so the X-thread split below adds no CTA reply), and
+        # skip the mandatory-UTM P2 alert entirely. utm_* columns stay None.
+        if not stages.cta:
+            cta_account = plan.get("account") or accounts_map.get(plat, "donald_en")
+            cta_url = None
+            cta_label = "cta_disabled"
             try:
-                if not is_x_thread:
-                    plan["content"] = inject_cta(plan["content"], cta_url, strict=False)
+                plan["content"] = strip_cta(plan["content"])
                 if extra_settings.get("description"):
-                    extra_settings["description"] = inject_cta(
-                        extra_settings["description"], cta_url, strict=False,
-                    )
-                cta_label = f"cta_kind={cta_kind} account={cta_account}"
+                    extra_settings["description"] = strip_cta(extra_settings["description"])
             except Exception as exc:  # noqa: BLE001 — never block on this
                 logger.exception(
-                    "inject_cta failed for piece=%s platform=%s: %s",
-                    piece_id, plat, exc,
+                    "strip_cta failed for piece=%s platform=%s: %s", piece_id, plat, exc,
                 )
-                cta_label = f"cta=ERR ({type(exc).__name__})"
         else:
-            # Missing CTA URL is a soft failure — the post will go live but
-            # without attribution. Loud P2 so the operator notices.
-            logger.warning(
-                "no CTA URL for piece=%s platform=%s account=%s — post will "
-                "publish without attribution link",
-                piece_id, plat, cta_account,
-            )
-            try:
-                alert(
-                    "P2",
-                    f"schedule_planner: missing CTA URL for {piece_id}/{plat}",
-                    {"account": cta_account, "kind": cta_kind},
+            cta_account = plan.get("account") or accounts_map.get(plat, "donald_en")
+            cta_url = _pick_cta_url(utm_links, plat, cta_account, kind=cta_kind)
+            cta_label = "no_cta_url"
+            # X threads keep the main post link-free and put the CTA in a trailing
+            # reply (see split_x_thread below), so DON'T inject the CTA into the
+            # X content blob here — only non-X platforms get inline injection.
+            if cta_url:
+                try:
+                    if not is_x_thread:
+                        plan["content"] = inject_cta(plan["content"], cta_url, strict=False)
+                    if extra_settings.get("description"):
+                        extra_settings["description"] = inject_cta(
+                            extra_settings["description"], cta_url, strict=False,
+                        )
+                    cta_label = f"cta_kind={cta_kind} account={cta_account}"
+                except Exception as exc:  # noqa: BLE001 — never block on this
+                    logger.exception(
+                        "inject_cta failed for piece=%s platform=%s: %s",
+                        piece_id, plat, exc,
+                    )
+                    cta_label = f"cta=ERR ({type(exc).__name__})"
+            else:
+                # Missing CTA URL is a soft failure — the post will go live but
+                # without attribution. Loud P2 so the operator notices.
+                logger.warning(
+                    "no CTA URL for piece=%s platform=%s account=%s — post will "
+                    "publish without attribution link",
+                    piece_id, plat, cta_account,
                 )
-            except Exception:
-                logger.exception("alert() emission failed")
+                try:
+                    alert(
+                        "P2",
+                        f"schedule_planner: missing CTA URL for {piece_id}/{plat}",
+                        {"account": cta_account, "kind": cta_kind},
+                    )
+                except Exception:
+                    logger.exception("alert() emission failed")
 
         # X (Twitter): pre-split the thread at ``## Tweet N`` boundaries into
         # one entry per tweet so Postiz posts them verbatim (main + replies)
@@ -914,6 +1013,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="override next-Monday anchor (YYYY-MM-DD) for deterministic testing",
     )
+    p.add_argument(
+        "--video", default=None,
+        help="口令: override video stage (on/off/yes/no). off = skip video platforms",
+    )
+    p.add_argument(
+        "--cta", default=None,
+        help="口令: override CTA stage (on/off/yes/no). off = publish link-free, no UTM",
+    )
+    p.add_argument(
+        "--visual", default=None,
+        help="口令: override visual stage (on/off/yes/no). off = publish without rendered image",
+    )
     p.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"))
     return p.parse_args(argv)
 
@@ -932,7 +1043,10 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("invalid --base-monday %r: %s", args.base_monday, exc)
             return 2
     try:
-        summary = run(args.piece_id, dry_run=args.dry_run, base_monday=base_monday)
+        summary = run(
+            args.piece_id, dry_run=args.dry_run, base_monday=base_monday,
+            video=args.video, cta=args.cta, visual=args.visual,
+        )
     except FileNotFoundError as exc:
         logger.error("schedule_planner: %s", exc)
         return 2
@@ -944,3 +1058,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+

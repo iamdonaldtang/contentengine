@@ -29,6 +29,12 @@ gunicorn>=21.0,<22.0          # production WSGI (Linux)
 # X scraping fallback (M2)
 twikit>=2.0,<3.0              # KOL Watch fallback (replaces dead snscrape/twint)
 
+# Visual / media line (2026-06-30 - config-image engine visual_runner, no GPU)
+cairosvg>=2.7,<3.0           # SVG -> PNG/PDF render for x_hero / carousel / yt_thumb
+Pillow>=10.0,<12.0           # compositing: overlay logo / QR onto rendered cards
+img2pdf>=0.5,<1.0            # lossless carousel PNG -> PDF (no JPEG codec dependency)
+edge-tts>=6.1,<8.0           # CPU TTS narration for tier-1 lightweight video (free)
+
 # Testing
 pytest>=8.0,<9.0
 pytest-asyncio>=0.23,<1.0

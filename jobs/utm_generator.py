@@ -205,6 +205,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--hook-type", required=True)
     p.add_argument("--out", default=None, help="override output path")
+    p.add_argument("--cta", default=None, help="override CTA stage (on/off). off = skip UTM generation")
     p.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"))
     return p.parse_args(argv)
 
@@ -219,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
     )
+    # Pipeline stage gate: when the CTA stage is OFF (global / per-piece /
+    # runtime override), don't generate UTM links or burn shlink slots.
+    # schedule_planner in cta-off mode publishes link-free and does not
+    # require utm_links.json.
+    from lib.pipeline_flags import resolve_stages
+    if not resolve_stages(args.piece_id, cta_override=args.cta).cta:
+        logger.info(
+            "CTA stage disabled for piece=%s - skipping UTM generation (no utm_links.json)",
+            args.piece_id,
+        )
+        return 0
     try:
         out = generate_utm(
             piece_id=args.piece_id,

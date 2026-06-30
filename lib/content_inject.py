@@ -119,10 +119,43 @@ def inject_cta(content: str, cta_url: str, *, strict: bool = False) -> str:
     return PLACEHOLDER_RE.sub(cta_url, content)
 
 
+# Connector glyphs an author may place right before the CTA URL, e.g.
+#   "check it -> {{CTA_URL}}"  /  "learn more: {{CTA_URL}}"
+# When the CTA stage is OFF we strip the placeholder AND a directly-preceding
+# connector so the sentence doesn't end on a stray arrow/colon. Words before
+# the connector are author copy and are preserved.
+_STRIP_CTA_RE = re.compile(
+    r"[ \t]*(?:-+>|->|=>|>>|:|::|-{1,2})?[ \t]*" + re.escape(PLACEHOLDER) + r"[ \t]*"
+)
+
+
+def strip_cta(content: str) -> str:
+    """Remove every ``{{CTA_URL}}`` placeholder for link-free publishing.
+
+    Used when the CTA pipeline stage is disabled (no UTM links generated): the
+    post should go live with NO attribution URL. We delete the placeholder plus
+    an immediately-preceding connector (``->``, ``=>``, ``:``, ``--``), then
+    drop any line that became blank and collapse 3+ consecutive newlines to 2.
+
+    Safe on content with no placeholder (returns it unchanged).
+    """
+    if PLACEHOLDER not in content:
+        return content
+    out = _STRIP_CTA_RE.sub("", content)
+    lines = [ln.rstrip() for ln in out.split("\n")]
+    cleaned: list[str] = []
+    for ln in lines:
+        if ln == "" and cleaned and cleaned[-1] == "":
+            continue  # collapse consecutive blanks
+        cleaned.append(ln)
+    return "\n".join(cleaned).strip() + "\n"
+
+
 __all__ = [
     "PLACEHOLDER",
     "MissingPlaceholderError",
     "has_placeholder",
     "count_placeholder",
     "inject_cta",
+    "strip_cta",
 ]

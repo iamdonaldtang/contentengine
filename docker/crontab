@@ -23,6 +23,10 @@
 # 0 10 * * 0   cd /app && python -m jobs.kol_watch          # disabled 2026-05-18: 暂停 KOL 监控
 0 18 * * 0   cd /app && python -m jobs.weekly_reporter
 30 18 * * 0  cd /app && python -m jobs.performance_analyzer
+# Two-tier promotion data layer (2026-06-30): score aged pieces, flag tier-1
+# winners (top 20% engagement) into runtime/drafts/<id>/promotion.json. Flag-only;
+# never renders. Runs after metrics_collector (daily 20:00) + performance_analyzer.
+45 18 * * 0  cd /app && python -m jobs.promotion_scanner
 0 19 * * 0   cd /app && python -m jobs.monthly_reporter
 0 20 * * 0   cd /app && python -m jobs.topic_ranker
 
